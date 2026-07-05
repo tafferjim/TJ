@@ -1,10 +1,9 @@
 import os
 from fastmcp import FastMCP
 
-# Initialize FastMCP
 mcp = FastMCP("AIPI-Extension")
 
-# Create a sample tool your AIPI Lite can call
+# Tool 1: The Dice Roller (Already working!)
 @mcp.tool()
 def roll_dice(sides: int = 6) -> str:
     """Rolls a virtual dice with a custom number of sides."""
@@ -12,10 +11,25 @@ def roll_dice(sides: int = 6) -> str:
     result = random.randint(1, sides)
     return f"You rolled a {result} on a {sides}-sided dice!"
 
+# Tool 2: New Coin Flipper
+@mcp.tool()
+def flip_coin() -> str:
+    """Flips a coin to return heads or tails."""
+    import random
+    return f"The coin landed on {random.choice(['Heads', 'Tails'])}!"
+
+# Tool 3: New Personalized dynamic greeting
+@mcp.tool()
+def get_motivational_quote(name: str) -> str:
+    """Generates a quick custom motivational boost for the user."""
+    import random
+    quotes = [
+        "You are doing great things today!",
+        "Every small step leads to big progress.",
+        "Keep pushing forward, you've got this!"
+    ]
+    return f"Hey {name}, here is your boost: {random.choice(quotes)}"
+
 if __name__ == "__main__":
-    # Render automatically injects a dynamic $PORT variable.
-    # We fall back to 8000 for local testing.
     port = int(os.environ.get("PORT", 8000))
-    
-    # Run the server using the SSE transport protocol over the web
     mcp.run(transport="sse", host="0.0.0.0", port=port)
