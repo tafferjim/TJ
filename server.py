@@ -51,7 +51,7 @@ def save_memory(content: str) -> str:
 
 @mcp.tool()
 def get_memories() -> str:
-    """Retrieves all saved long-term memories and facts from the database with clear ID numbers."""
+    """Retrieves all memories and builds a hard-coded verbal numbered text list."""
     if not DB_URL:
         return "Error: DATABASE_URL environment variable is not set."
         
@@ -59,8 +59,8 @@ def get_memories() -> str:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         
-        # Order by database ID number
-        cursor.execute("SELECT id, memory_text, created_at FROM memories ORDER BY id ASC;")
+        # Pull the absolute database ID along with the core text
+        cursor.execute("SELECT id, memory_text FROM memories ORDER BY id ASC;")
         rows = cursor.fetchall()
         
         cursor.close()
@@ -70,20 +70,22 @@ def get_memories() -> str:
             return "The memories table exists, but it is currently empty! Try saving a memory first."
             
         memory_list = []
-        # FIX: Explicitly unpack data tuple using index arrays
-        for row in rows:
-            mem_id = row[0]    # Digit position (ID number)
-            mem_text = row[1]  # Core context text 
+        
+        # Using enumerate forces a bulletproof text sequence
+        for index, row in enumerate(rows, start=1):
+            db_id = str(row[0])      # Absolute PostgreSQL key
+            text_content = str(row[1]) # The saved memory content
             
-            memory_list.append(f"MEMORY ID NUMBER {mem_id}: '{mem_text}'")
+            # This format makes it impossible for the AI to ignore the numbers
+            memory_list.append(f"Item number {index} has database key code {db_id}. The memory text says: {text_content}")
             
-        return "Database extraction successful. Here are the entries:\n" + "\n".join(memory_list)
+        return "Database extraction successful. Here are your listed entries:\n\n" + "\n".join(memory_list)
     except Exception as e:
         return f"Failed to retrieve memories. Error: {str(e)}"
 
 @mcp.tool()
 def delete_memory(memory_id: int) -> str:
-    """Deletes a specific memory from the database using its numerical ID."""
+    """Deletes a specific memory from the database using its numerical key code."""
     if not DB_URL:
         return "Error: DATABASE_URL environment variable is not set."
         
@@ -97,7 +99,7 @@ def delete_memory(memory_id: int) -> str:
         if not row:
             cursor.close()
             conn.close()
-            return f"Could not find any memory with ID {memory_id}."
+            return f"Could not find any memory matching database key code {memory_id}."
             
         memory_text = row[0]
         
@@ -106,7 +108,7 @@ def delete_memory(memory_id: int) -> str:
         
         cursor.close()
         conn.close()
-        return f"Successfully deleted memory ID {memory_id}: '{memory_text}'"
+        return f"Successfully deleted memory key code {memory_id}: '{memory_text}'"
     except Exception as e:
         return f"Failed to delete memory. Error: {str(e)}"
 
@@ -115,4 +117,5 @@ if __name__ == "__main__":
     
     port = int(os.environ.get("PORT", 8000))
     mcp.run(transport="sse", host="0.0.0.0", port=port)
+
 
