@@ -59,7 +59,8 @@ def get_memories() -> str:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         
-        cursor.execute("SELECT id, memory_text, created_at FROM memories ORDER BY created_at DESC;")
+        # Order by ID chronologically so the numbers don't jump around randomly
+        cursor.execute("SELECT id, memory_text, created_at FROM memories ORDER BY id ASC;")
         rows = cursor.fetchall()
         
         cursor.close()
@@ -69,16 +70,18 @@ def get_memories() -> str:
             return "The memories table exists, but it is currently empty! Try saving a memory first."
             
         memory_list = []
-        # Cleanly separate the ID, text, and timestamp variables from the database tuple
+        # Explicitly unpack the data tuple using array index positions
         for row in rows:
-            mem_id = row[0]
-            mem_text = row[1]
-            mem_date = row[2]
+            mem_id = row[0]      # Grabs the numerical ID column
+            mem_text = row[1]    # Grabs the memory text column
+            mem_date = row[2]    # Grabs the timestamp column
+            
             memory_list.append(f"ID {mem_id}: '{mem_text}' (Saved on {mem_date})")
             
-        return "Here are the saved memories:\n" + "\n".join(memory_list)
+        return "Here are the saved memories extracted directly from the Postgres database:\n" + "\n".join(memory_list)
     except Exception as e:
         return f"Failed to retrieve memories. Error: {str(e)}"
+
 
 @mcp.tool()
 def delete_memory(memory_id: int) -> str:
