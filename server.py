@@ -59,7 +59,7 @@ def get_memories() -> str:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         
-        # Order by ID chronologically so the numbers don't jump around randomly
+        # Order by database ID number
         cursor.execute("SELECT id, memory_text, created_at FROM memories ORDER BY id ASC;")
         rows = cursor.fetchall()
         
@@ -70,18 +70,16 @@ def get_memories() -> str:
             return "The memories table exists, but it is currently empty! Try saving a memory first."
             
         memory_list = []
-        # Explicitly unpack the data tuple using array index positions
+        # FIX: Explicitly unpack data tuple using index arrays
         for row in rows:
-            mem_id = row[0]      # Grabs the numerical ID column
-            mem_text = row[1]    # Grabs the memory text column
-            mem_date = row[2]    # Grabs the timestamp column
+            mem_id = row[0]    # Digit position (ID number)
+            mem_text = row[1]  # Core context text 
             
-            memory_list.append(f"ID {mem_id}: '{mem_text}' (Saved on {mem_date})")
+            memory_list.append(f"MEMORY ID NUMBER {mem_id}: '{mem_text}'")
             
-        return "Here are the saved memories extracted directly from the Postgres database:\n" + "\n".join(memory_list)
+        return "Database extraction successful. Here are the entries:\n" + "\n".join(memory_list)
     except Exception as e:
         return f"Failed to retrieve memories. Error: {str(e)}"
-
 
 @mcp.tool()
 def delete_memory(memory_id: int) -> str:
@@ -93,7 +91,6 @@ def delete_memory(memory_id: int) -> str:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         
-        # Check if the memory exists first
         cursor.execute("SELECT memory_text FROM memories WHERE id = %s;", (memory_id,))
         row = cursor.fetchone()
         
@@ -104,7 +101,6 @@ def delete_memory(memory_id: int) -> str:
             
         memory_text = row[0]
         
-        # Delete the row
         cursor.execute("DELETE FROM memories WHERE id = %s;", (memory_id,))
         conn.commit()
         
