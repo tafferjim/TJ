@@ -210,6 +210,70 @@ def read_recipe(keyword: str, section: str = "all") -> str:
     except Exception as e:
         return f"Failed to retrieve the recipe. Error: {str(e)}"
 
+@mcp.tool()
+def list_recipes_paged(page: int = 1, limit: int = 3) -> str:
+    """Lists saved recipes from the database in small batches for easy scannability.
+    
+    Args:
+        page: The page number to retrieve (starts at 1).
+        limit: Number of recipe titles to show per page (defaults to 3).
+    """
+    if not DB_URL:
+        return "Error: DATABASE_URL environment variable is not set."
+        
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        
+        # Pull all memory items to scan for recipes
+        cursor.execute("SELECT id, memory_text FROM memories ORDER BY id DESC;")
+        rows = cursor.fetchall()
+        
+        cursor.close()
+        conn.close()
+        
+        if not rows:
+            return "Your database is currently empty. Try saving a recipe first!"
+            
+        # Filter entries to pull out things that look like recipes 
+        # (Looking for keywords like 'recipe', 'ingredients', 'instructions', 'cook', 'bake', or URLs)
+        recipe_keywords = ["recipe", "ingredients", "instructions", "cook", "bake", "scraped recipe"]
+        found_recipes = []
+        
+        for row in rows:
+            text = row[1]
+            # If the entry mentions a recipe keyword, try to extract a clean title line
+            if any(kw in text.lower() for kw in recipe_keywords):
+                first_line = text.split("\n")[0].strip("- ")
+                # Truncate long lines to keep the list punchy
+                title = first_line[:50] + "..." if len(first_line) > 50 else first_line
+                found_recipes.append(title)
+                
+        if not found_recipes:
+            return "I see saved memories in your database, but none of them look like recipes yet."
+            
+        # Calculate pagination boundaries
+        total_recipes = len(found_recipes)
+        total_pages = (total_recipes + limit - 1) // limit
+        
+        if page > total_pages or page < 1:
+            return f"Page {page} does not exist. You only have {total_pages} page(s) of recipes."
+            
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+        page_items = found_recipes[start_idx:end_idx]
+        
+        # Build a scannable menu layout
+        output = [f"--- RECIPE MENU (Page {page} of {total_pages}) ---"]
+        for i, item in enumerate(page_items, start=start_idx + 1):
+            output.append(f"{i}. {item}")
+            
+        output.append("\n[To view more, tell me: 'Show the next page' or 'Go to recipe page X']")
+        return "\n".join(output)
+        
+    except Exception as e:
+        return f"Failed to list recipes. Error: {str(e)}"
+
 if __name__ == "__main__":
     initialize_database()
     port = int(os.environ.get("PORT", 8000))
