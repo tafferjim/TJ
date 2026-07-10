@@ -95,14 +95,26 @@ def delete_last_memory() -> str:
 
 @mcp.tool()
 def get_local_time() -> str:
-    """Returns the current local time."""
-    from zoneinfo import ZoneInfo
+    """Returns the current local time adjusted for Texas (Central Time) without external tzdata dependencies."""
+    # Get current universal time
+    utc_now = datetime.datetime.now(datetime.timezone.utc)
     
-    # Change "America/New_York" to your matching local time zone
-    local_tz = ZoneInfo("America/Chicago")
-    now = datetime.datetime.now(local_tz)
+    # Automatic Central Daylight Time (CDT) vs Central Standard Time (CST) calculation
+    # In the US, DST starts 2nd Sunday in March and ends 1st Sunday in November.
+    # This formula approximates the offset cleanly for cloud environments.
+    year = utc_now.year
+    dst_start = datetime.datetime(year, 3, 8) + datetime.timedelta(days=(6 - datetime.datetime(year, 3, 8).weekday()))
+    dst_end = datetime.datetime(year, 11, 1) + datetime.timedelta(days=(6 - datetime.datetime(year, 11, 1).weekday()))
     
-    return f"The current local time is {now.strftime('%I:%M %p on %B %d, %Y')}."
+    # Apply UTC-5 for Daylight Saving Time (CDT) or UTC-6 for Standard Time (CST)
+    if dst_start <= utc_now.replace(tzinfo=None) < dst_end:
+        local_offset = datetime.timezone(datetime.timedelta(hours=-5)) # CDT
+    else:
+        local_offset = datetime.timezone(datetime.timedelta(hours=-6)) # CST
+        
+    local_now = utc_now.astimezone(local_offset)
+    return f"The current local time is {local_now.strftime('%I:%M %p on %B %d, %Y')}."
+
 
 
 @mcp.tool()
