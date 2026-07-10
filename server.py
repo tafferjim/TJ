@@ -121,6 +121,53 @@ def get_local_weather(city: str) -> str:
     except Exception as e:
         return f"Failed to fetch weather data. Error: {str(e)}"
 
+@mcp.tool()
+def scrape_and_save_recipe(url: str) -> str:
+    """Fetches a recipe webpage from an online link, extracts the core text, and automatically saves it to the database."""
+    import requests
+    from bs4 import BeautifulSoup
+
+    try:
+        # 1. Fetch the webpage content with a standard user-agent header
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+        response = requests.get(url, headers=headers, timeout=10)
+        
+        if response.status_code != 200:
+            return f"Failed to reach the website. Status code: {response.status_code}"
+
+        # 2. Parse the HTML and extract text from the core recipe layout elements
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Strip out unwanted website clutter like navigation bars, ads, and footers
+        for element in soup(["script", "style", "nav", "footer", "header", "form"]):
+            element.decompose()
+
+        # Extract remaining text lines cleanly
+        raw_text = soup.get_text(separator="\n")
+        cleaned_lines = [line.strip() for line in raw_text.splitlines() if line.strip()]
+        page_content = "\n".join(cleaned_lines[:300]) # Cap it to the first 300 lines to fit database lengths
+
+        # 3. Connect to your database and push the scraped recipe straight in
+        if not DB_URL:
+            return "Error: DATABASE_URL environment variable is not set."
+            
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        query = "INSERT INTO memories (memory_text) VALUES (%s);"
+        
+        # Format the entry title cleanly with the source URL
+        database_entry = f"Scraped Recipe Link ({url}):\n\n{page_content}"
+        
+        cursor.execute(query, (database_entry,))
+        conn.commit()
+        cursor.close()
+        conn.close()
+
+        return f"Successfully scraped the link and imported the recipe data straight to your database!"
+
+    except Exception as e:
+        return f"Failed to pull recipe from link. Error: {str(e)}"
+
 if __name__ == "__main__":
     initialize_database()
     port = int(os.environ.get("PORT", 8000))
