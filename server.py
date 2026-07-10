@@ -96,8 +96,14 @@ def delete_last_memory() -> str:
 @mcp.tool()
 def get_local_time() -> str:
     """Returns the current local time."""
-    now = datetime.datetime.now()
+    from zoneinfo import ZoneInfo
+    
+    # Change "America/New_York" to your matching local time zone
+    local_tz = ZoneInfo("America/Chicago")
+    now = datetime.datetime.now(local_tz)
+    
     return f"The current local time is {now.strftime('%I:%M %p on %B %d, %Y')}."
+
 
 @mcp.tool()
 def get_local_weather(city: str) -> str:
