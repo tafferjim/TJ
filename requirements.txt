@@ -2,3 +2,4 @@ fastmcp
 uvicorn
 psycopg2-binary
 requests
+beautifulsoup4
