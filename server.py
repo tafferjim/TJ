@@ -29,6 +29,12 @@ def initialize_database():
     except Exception as e:
         print(f"Database initialization failed: {str(e)}", flush=True)
 
+def clean_hardware_text(text: str) -> str:
+    """Safely converts special symbols to words to completely bypass slash and box display bugs."""
+    if not text:
+        return ""
+    return text.replace("½", " 1-half ").replace("¼", " 1-fourth ").replace("¾", " 3-fourths ")
+
 @mcp.tool()
 def save_memory(content: str) -> str:
     """Saves a new long-term memory or recipe about the user to the external database."""
@@ -62,8 +68,7 @@ def get_memories() -> str:
             return "Your memory bank is currently empty."
         memory_list = []
         for row in rows:
-            # FIX: Properly extract string from row tuple
-            text = str(row[0]).replace("½", "1/2").replace("¼", "1/4").replace("¾", "3/4")
+            text = clean_hardware_text(str(row[0]))
             memory_list.append(f"- {text}")
         return "Here are your saved logs:\n\n" + "\n".join(memory_list)
     except Exception as e:
@@ -84,7 +89,7 @@ def delete_last_memory() -> str:
             conn.close()
             return "There are no memories in the database to delete."
         mem_id = row[0]
-        mem_text = row[1]
+        mem_text = clean_hardware_text(row[1])
         cursor.execute("DELETE FROM memories WHERE id = %s;", (mem_id,))
         conn.commit()
         cursor.close()
@@ -133,8 +138,7 @@ def read_recipe(keyword: str) -> str:
         if not row:
             return f"I couldn't find any saved recipes matching '{keyword}'."
             
-        # FIX: Extract the text from the tuple and instantly drop fraction boxes
-        recipe_text = str(row[0]).replace("½", "1/2").replace("¼", "1/4").replace("¾", "3/4")
+        recipe_text = clean_hardware_text(str(row[0]))
         return recipe_text
     except Exception as e:
         return f"Error reading recipe: {str(e)}"
@@ -157,17 +161,16 @@ def list_recipes_paged(page: int = 1, limit: int = 3) -> str:
             
         found_recipes = []
         for row in rows:
-            # FIX: Safely extract string from row tuple first
-            text = str(row[0]).replace("½", "1/2").replace("¼", "1/4").replace("¾", "3/4")
+            text = clean_hardware_text(str(row[0]))
             
-            # Keep the search parameters wide open to catch everything
-            if len(text.split("\n")) > 1 or any(k in text.lower() for k in ["recipe", "ingredients", "cook", "cornbread"]):
+            # FIXED FILTER: Checks keywords explicitly, completely ignoring line breaks
+            if any(k in text.lower() for k in ["recipe", "ingredients", "cook", "bake", "cornbread", "flour"]):
                 first_line = text.split("\n")[0].strip("- *#")
-                title = first_line[:50] + "..." if len(first_line) > 50 else first_line
+                title = first_line[:45] + "..." if len(first_line) > 45 else first_line
                 found_recipes.append(title)
                 
         if not found_recipes:
-            return "No entries look like a recipe block yet."
+            return "No entries match your recipe keywords."
             
         total_recipes = len(found_recipes)
         total_pages = (total_recipes + limit - 1) // limit
@@ -191,4 +194,5 @@ if __name__ == "__main__":
     initialize_database()
     port = int(os.environ.get("PORT", 8000))
     mcp.run(transport="sse", host="0.0.0.0", port=port)
+
 
