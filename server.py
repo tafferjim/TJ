@@ -95,23 +95,18 @@ def delete_last_memory() -> str:
 
 @mcp.tool()
 def get_local_time() -> str:
-    """Returns the current local time by directly pulling from a live time API to bypass all server clock caching."""
-    import requests
-    try:
-        # Request live Austin time directly from the World Time API
-        response = requests.get("https://worldtimeapi.org", timeout=5).json()
-        datetime_str = response["datetime"] # Example: "2026-07-10T14:11:22..."
-        
-        # Parse the web timestamp into a clean format
-        from datetime import datetime
-        clean_time = datetime.fromisoformat(datetime_str[0:19])
-        return f"The current local time is {clean_time.strftime('%I:%M %p on %B %d, %Y')}."
-    except Exception as e:
-        # Fallback to local server time calculation if the web API fails
-        import datetime as dt
-        utc_now = dt.datetime.utcnow()
-        local_now = utc_now - dt.timedelta(hours=5) # Hard force CDT offset
-        return f"The current local time is {local_now.strftime('%I:%M %p on %B %d, %Y')}."
+    """Returns the current local time by hard-forcing a strict 6-hour deduction from UTC."""
+    import datetime as dt
+    
+    # Grab pure universal time
+    utc_now = dt.datetime.utcnow()
+    
+    # Strictly force standard Austin winter time (UTC-6)
+    local_offset = dt.timedelta(hours=-6)
+    local_now = utc_now + local_offset
+    
+    return f"The current local time is {local_now.strftime('%I:%M %p on %B %d, %Y')}."
+
 
 @mcp.tool()
 def get_local_weather(city: str) -> str:
