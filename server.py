@@ -95,26 +95,23 @@ def delete_last_memory() -> str:
 
 @mcp.tool()
 def get_local_time() -> str:
-    """Returns the current local time forced to pure UTC baselines to bypass Render system clock overrides."""
-    # Force pure, unshifted Universal Time from the web baseline
-    utc_now = datetime.datetime.utcnow()
-    
-    # Automatic Central Daylight Time (CDT) vs Central Standard Time (CST) calculation
-    year = utc_now.year
-    dst_start = datetime.datetime(year, 3, 8) + datetime.timedelta(days=(6 - datetime.datetime(year, 3, 8).weekday()))
-    dst_end = datetime.datetime(year, 11, 1) + datetime.timedelta(days=(6 - datetime.datetime(year, 11, 1).weekday()))
-    
-    # Force pure UTC-5 for Daylight Saving Time (CDT) or UTC-6 for Standard Time (CST)
-    if dst_start <= utc_now < dst_end:
-        local_offset = datetime.timedelta(hours=-5) # CDT (Austin Summer)
-    else:
-        local_offset = datetime.timedelta(hours=-6) # CST (Austin Winter)
+    """Returns the current local time by directly pulling from a live time API to bypass all server clock caching."""
+    import requests
+    try:
+        # Request live Austin time directly from the World Time API
+        response = requests.get("https://worldtimeapi.org", timeout=5).json()
+        datetime_str = response["datetime"] # Example: "2026-07-10T14:11:22..."
         
-    local_now = utc_now + local_offset
-    return f"The current local time is {local_now.strftime('%I:%M %p on %B %d, %Y')}."
-
-
-
+        # Parse the web timestamp into a clean format
+        from datetime import datetime
+        clean_time = datetime.fromisoformat(datetime_str[0:19])
+        return f"The current local time is {clean_time.strftime('%I:%M %p on %B %d, %Y')}."
+    except Exception as e:
+        # Fallback to local server time calculation if the web API fails
+        import datetime as dt
+        utc_now = dt.datetime.utcnow()
+        local_now = utc_now - dt.timedelta(hours=5) # Hard force CDT offset
+        return f"The current local time is {local_now.strftime('%I:%M %p on %B %d, %Y')}."
 
 @mcp.tool()
 def get_local_weather(city: str) -> str:
