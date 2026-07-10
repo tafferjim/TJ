@@ -8,13 +8,19 @@ mcp = FastMCP("AIPI-Memories-Extension")
 DB_URL = os.environ.get("DATABASE_URL")
 
 def initialize_database():
-    """Automatically creates the memories table if it does not exist yet."""
+    """Wipes out old data automatically on startup and sets up clean, separated tables."""
     if not DB_URL:
         print("DATABASE_URL not found. Skipping initialization.", flush=True)
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
+        
+        print("Wiping out old messy database records...", flush=True)
+        # 1. This instantly drops and clears your old messy memory table layout
+        cursor.execute("DROP TABLE IF EXISTS memories;")
+        
+        # 2. This builds a fresh, clean general memories table
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id SERIAL PRIMARY KEY,
@@ -22,81 +28,62 @@ def initialize_database():
                 memory_text TEXT NOT NULL
             );
         """)
+        
+        # 3. This builds your brand-new, isolated recipe cookbook table
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS recipes (
+                id SERIAL PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                recipe_name TEXT NOT NULL,
+                ingredients TEXT NOT NULL,
+                instructions TEXT NOT NULL
+            );
+        """)
+        
         conn.commit()
         cursor.close()
         conn.close()
-        print("Database initialized successfully.", flush=True)
+        print("Database wiped clean and rebuilt successfully!", flush=True)
     except Exception as e:
         print(f"Database initialization failed: {str(e)}", flush=True)
 
 def clean_hardware_text(text: str) -> str:
-    """Safely converts special symbols to words to completely bypass slash and box display bugs."""
+    """Converts complex fraction symbols to words to completely stop screen rendering bugs."""
     if not text:
         return ""
     return text.replace("½", " 1-half ").replace("¼", " 1-fourth ").replace("¾", " 3-fourths ")
 
+# ==================== GENERAL MEMORY TOOLS ====================
+
 @mcp.tool()
 def save_memory(content: str) -> str:
-    """Saves a new long-term memory or recipe about the user to the external database."""
-    if not DB_URL:
-        return "Error: DATABASE_URL environment variable is not set."
+    """Saves a standard personal memory or fact. Does NOT save recipes here."""
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        query = "INSERT INTO memories (memory_text) VALUES (%s);"
-        cursor.execute(query, (content,))
+        cursor.execute("INSERT INTO memories (memory_text) VALUES (%s);", (content,))
         conn.commit()
         cursor.close()
         conn.close()
-        return f"Successfully saved: '{content}'"
+        return f"Saved to memories: '{content}'"
     except Exception as e:
-        return f"Failed to save memory. Error: {str(e)}"
-
-@mcp.tool()
-def get_memories() -> str:
-    """Retrieves all memories as a simple text list."""
-    if not DB_URL:
-        return "Error: DATABASE_URL environment variable is not set."
-    try:
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
-        cursor.execute("SELECT memory_text FROM memories ORDER BY id ASC;")
-        rows = cursor.fetchall()
-        cursor.close()
-        conn.close()
-        if not rows:
-            return "Your memory bank is currently empty."
-        memory_list = []
-        for row in rows:
-            text = clean_hardware_text(str(row[0]))
-            memory_list.append(f"- {text}")
-        return "Here are your saved logs:\n\n" + "\n".join(memory_list)
-    except Exception as e:
-        return f"Failed to retrieve memories. Error: {str(e)}"
+        return f"Error saving memory: {str(e)}"
 
 @mcp.tool()
 def delete_last_memory() -> str:
-    """Deletes the single most recently saved memory from the database. No ID required."""
-    if not DB_URL:
-        return "Error: DATABASE_URL environment variable is not set."
+    """Deletes the most recent general memory entry."""
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        cursor.execute("SELECT id, memory_text FROM memories ORDER BY id DESC LIMIT 1;")
-        row = cursor.fetchone()
-        if not row:
-            cursor.close()
-            conn.close()
-            return "There are no memories in the database to delete."
-        mem_id = row[0]
-        mem_text = clean_hardware_text(row[1])
-        cursor.execute("DELETE FROM memories WHERE id = %s;", (mem_id,))
+        cursor.execute("DELETE FROM memories WHERE id = (SELECT id FROM memories ORDER BY id DESC LIMIT 1);")
         conn.commit()
         cursor.close()
         conn.close()
-        return f"Successfully erased the most recent entry: '{mem_text}'"
+        return "Successfully deleted your last general memory."
     except Exception as e:
-        return f"Failed to delete the last memory. Error: {str(e)}"
+        return f"Error: {str(e)}"
+
+# ==================== TIME & WEATHER TOOLS ====================
 
 @mcp.tool()
 def get_local_time() -> str:
@@ -106,89 +93,77 @@ def get_local_time() -> str:
 
 @mcp.tool()
 def get_local_weather(city: str = "Austin") -> str:
-    """Fetches the current weather for a specific city. Defaults to Austin."""
-    api_key = "YOUR_OPENWEATHERMAP_API_KEY" # Replace with your real key if needed
+    """Fetches weather for a city."""
+    api_key = "YOUR_OPENWEATHERMAP_API_KEY" # Add your real key here if you use it
     if api_key == "YOUR_OPENWEATHERMAP_API_KEY":
-        return "Error: Weather API key has not been configured in the script yet."
+        return "Error: Weather API key not configured."
     url = f"https://openweathermap.org{city}&appid={api_key}&units=imperial"
     try:
         response = requests.get(url).json()
-        if response.get("cod") != 200:
-            return f"Could not find weather data for: '{city}'."
         temp = response["main"]["temp"]
         desc = response["weather"]["description"]
         return f"The current weather in {city.title()} is {temp}°F with {desc}."
     except Exception as e:
-        return f"Failed to fetch weather data. Error: {str(e)}"
+        return f"Error fetching weather: {str(e)}"
+
+# ==================== DEDICATED RECIPE TOOLS ====================
 
 @mcp.tool()
-def read_recipe(keyword: str) -> str:
-    """Retrieves a specific recipe text block from the database by matching a keyword."""
-    if not DB_URL:
-        return "Error: DATABASE_URL environment variable is not set."
+def save_recipe(recipe_name: str, ingredients: str, instructions: str) -> str:
+    """Saves a structured cooking recipe safely into the recipe book database table."""
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        query = "SELECT memory_text FROM memories WHERE memory_text ILIKE %s ORDER BY id DESC LIMIT 1;"
-        cursor.execute(query, (f"%{keyword}%",))
+        query = "INSERT INTO recipes (recipe_name, ingredients, instructions) VALUES (%s, %s, %s);"
+        cursor.execute(query, (recipe_name, ingredients, instructions))
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return f"Successfully logged the recipe for '{recipe_name}' into your cookbook database!"
+    except Exception as e:
+        return f"Failed to save recipe. Error: {str(e)}"
+
+@mcp.tool()
+def read_recipe(dish_name: str) -> str:
+    """Looks up a recipe from the cookbook table and formats fractions clearly for the screen."""
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        query = "SELECT recipe_name, ingredients, instructions FROM recipes WHERE recipe_name ILIKE %s ORDER BY id DESC LIMIT 1;"
+        cursor.execute(query, (f"%{dish_name}%",))
         row = cursor.fetchone()
         cursor.close()
         conn.close()
         
         if not row:
-            return f"I couldn't find any saved recipes matching '{keyword}'."
+            return f"I couldn't find any recipes for '{dish_name}' in your cookbook."
             
-        recipe_text = clean_hardware_text(str(row[0]))
-        return recipe_text
+        name = clean_hardware_text(row[0])
+        ing = clean_hardware_text(row[1])
+        ins = clean_hardware_text(row[2])
+        
+        return f"RECIPE FOR {name.upper()}:\n\n[INGREDIENTS]\n{ing}\n\n[INSTRUCTIONS]\n{ins}"
     except Exception as e:
-        return f"Error reading recipe: {str(e)}"
+        return f"Error opening cookbook: {str(e)}"
 
 @mcp.tool()
-def list_recipes_paged(page: int = 1, limit: int = 3) -> str:
-    """Lists saved recipes from the database in small, clean batches."""
-    if not DB_URL:
-        return "Error: DATABASE_URL environment variable is not set."
+def list_recipes() -> str:
+    """Lists every single dish saved inside the dedicated cookbook table."""
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        cursor.execute("SELECT memory_text FROM memories ORDER BY id DESC;")
+        cursor.execute("SELECT recipe_name FROM recipes ORDER BY recipe_name ASC;")
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
         
         if not rows:
-            return "Your database is currently empty."
+            return "Your cookbook is currently empty. Tell me a recipe to save!"
             
-        found_recipes = []
-        for row in rows:
-            text = clean_hardware_text(str(row[0]))
-            
-            # FIXED FILTER: Checks keywords explicitly, completely ignoring line breaks
-            if any(k in text.lower() for k in ["recipe", "ingredients", "cook", "bake", "cornbread", "flour"]):
-                first_line = text.split("\n")[0].strip("- *#")
-                title = first_line[:45] + "..." if len(first_line) > 45 else first_line
-                found_recipes.append(title)
-                
-        if not found_recipes:
-            return "No entries match your recipe keywords."
-            
-        total_recipes = len(found_recipes)
-        total_pages = (total_recipes + limit - 1) // limit
-        
-        if page > total_pages or page < 1:
-            return f"Page {page} does not exist. Total pages: {total_pages}."
-            
-        start_idx = (page - 1) * limit
-        end_idx = start_idx + limit
-        page_items = found_recipes[start_idx:end_idx]
-        
-        output = [f"--- RECIPE MENU (Page {page} of {total_pages}) ---"]
-        for i, item in enumerate(page_items, start=start_idx + 1):
-            output.append(f"{i}. {item}")
-            
-        return "\n".join(output)
+        titles = [f"- {clean_hardware_text(row[0])}" for row in rows]
+        return "Here are the recipes saved in your database cookbook:\n\n" + "\n".join(titles)
     except Exception as e:
-        return f"Failed to list recipes. Error: {str(e)}"
+        return f"Error viewing cookbook index: {str(e)}"
 
 if __name__ == "__main__":
     initialize_database()
