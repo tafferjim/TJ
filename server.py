@@ -168,6 +168,48 @@ def scrape_and_save_recipe(url: str) -> str:
     except Exception as e:
         return f"Failed to pull recipe from link. Error: {str(e)}"
 
+@mcp.tool()
+def read_recipe(keyword: str, section: str = "all") -> str:
+    """Retrieves a specific recipe from the database and breaks it down by section or step.
+    
+    Args:
+        keyword: The name of the dish (e.g., 'cornbread', 'lasagna').
+        section: Options are 'all', 'ingredients', 'instructions', or a step number like 'step 1'.
+    """
+    if not DB_URL:
+        return "Error: DATABASE_URL environment variable is not set."
+        
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        
+        # Search the database for any entry containing your keyword
+        query = "SELECT memory_text FROM memories WHERE memory_text ILIKE %s ORDER BY id DESC LIMIT 1;"
+        cursor.execute(query, (f"%{keyword}%",))
+        row = cursor.fetchone()
+        
+        cursor.close()
+        conn.close()
+        
+        if not row:
+            return f"I couldn't find any saved recipes matching '{keyword}' in your database."
+            
+        recipe_text = row[0]
+        
+        # If you ask for the whole thing
+        if section.lower() == "all":
+            return f"Found your recipe for {keyword}:\n\n{recipe_text}"
+            
+        # Let the AI filter the text block dynamically based on your request
+        return (
+            f"Here is the requested section ({section}) for your {keyword} recipe:\n\n"
+            f"{recipe_text}\n\n"
+            f"[AI Action: Please locate and read ONLY the requested '{section}' from the text above.]"
+        )
+        
+    except Exception as e:
+        return f"Failed to retrieve the recipe. Error: {str(e)}"
+
 if __name__ == "__main__":
     initialize_database()
     port = int(os.environ.get("PORT", 8000))
