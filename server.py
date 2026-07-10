@@ -94,29 +94,8 @@ def delete_last_memory() -> str:
         return f"Failed to delete the last memory. Error: {str(e)}"
 
 @mcp.tool()
-def get_local_time() -> str:
-    """Returns the current local time inside a protected code box to prevent client-side timezone shifting."""
-    import datetime as dt
-    
-    # Grab pure universal time
-    utc_now = dt.datetime.utcnow()
-    
-    # Austin is on Central Daylight Time (UTC-5) right now in July
-    local_offset = dt.timedelta(hours=-5)
-    local_now = utc_now + local_offset
-    
-    # Format the time cleanly
-    formatted_time = local_now.strftime('%I:%M %p')
-    formatted_date = local_now.strftime('%B %d, %Y')
-    
-    # Return using a protected markdown layout block
-    return (
-        "```\n"
-        f"AUSTIN LOCAL TIME: {formatted_time}\n"
-        f"DATE:              {formatted_date}\n"
-        "```\n"
-        "Please repeat the exact time shown inside the box above without modifying the hours."
-    )
+def get_local_weather(city: str = "Austin") -> str:
+    """Fetches the current weather for a specific city. Defaults to Austin, Texas."""
 
 @mcp.tool()
 def get_local_weather(city: str) -> str:
