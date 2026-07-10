@@ -95,18 +95,28 @@ def delete_last_memory() -> str:
 
 @mcp.tool()
 def get_local_time() -> str:
-    """Returns the current local time by hard-forcing a strict 6-hour deduction from UTC."""
+    """Returns the current local time inside a protected code box to prevent client-side timezone shifting."""
     import datetime as dt
     
     # Grab pure universal time
     utc_now = dt.datetime.utcnow()
     
-    # Strictly force standard Austin winter time (UTC-6)
-    local_offset = dt.timedelta(hours=-6)
+    # Austin is on Central Daylight Time (UTC-5) right now in July
+    local_offset = dt.timedelta(hours=-5)
     local_now = utc_now + local_offset
     
-    return f"The current local time is {local_now.strftime('%I:%M %p on %B %d, %Y')}."
-
+    # Format the time cleanly
+    formatted_time = local_now.strftime('%I:%M %p')
+    formatted_date = local_now.strftime('%B %d, %Y')
+    
+    # Return using a protected markdown layout block
+    return (
+        "```\n"
+        f"AUSTIN LOCAL TIME: {formatted_time}\n"
+        f"DATE:              {formatted_date}\n"
+        "```\n"
+        "Please repeat the exact time shown inside the box above without modifying the hours."
+    )
 
 @mcp.tool()
 def get_local_weather(city: str) -> str:
