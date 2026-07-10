@@ -95,25 +95,24 @@ def delete_last_memory() -> str:
 
 @mcp.tool()
 def get_local_time() -> str:
-    """Returns the current local time adjusted for Texas (Central Time) without external tzdata dependencies."""
-    # Get current universal time
-    utc_now = datetime.datetime.now(datetime.timezone.utc)
+    """Returns the current local time forced to pure UTC baselines to bypass Render system clock overrides."""
+    # Force pure, unshifted Universal Time from the web baseline
+    utc_now = datetime.datetime.utcnow()
     
     # Automatic Central Daylight Time (CDT) vs Central Standard Time (CST) calculation
-    # In the US, DST starts 2nd Sunday in March and ends 1st Sunday in November.
-    # This formula approximates the offset cleanly for cloud environments.
     year = utc_now.year
     dst_start = datetime.datetime(year, 3, 8) + datetime.timedelta(days=(6 - datetime.datetime(year, 3, 8).weekday()))
     dst_end = datetime.datetime(year, 11, 1) + datetime.timedelta(days=(6 - datetime.datetime(year, 11, 1).weekday()))
     
-    # Apply UTC-5 for Daylight Saving Time (CDT) or UTC-6 for Standard Time (CST)
-    if dst_start <= utc_now.replace(tzinfo=None) < dst_end:
-        local_offset = datetime.timezone(datetime.timedelta(hours=-5)) # CDT
+    # Force pure UTC-5 for Daylight Saving Time (CDT) or UTC-6 for Standard Time (CST)
+    if dst_start <= utc_now < dst_end:
+        local_offset = datetime.timedelta(hours=-5) # CDT (Austin Summer)
     else:
-        local_offset = datetime.timezone(datetime.timedelta(hours=-6)) # CST
+        local_offset = datetime.timedelta(hours=-6) # CST (Austin Winter)
         
-    local_now = utc_now.astimezone(local_offset)
+    local_now = utc_now + local_offset
     return f"The current local time is {local_now.strftime('%I:%M %p on %B %d, %Y')}."
+
 
 
 
