@@ -3,6 +3,7 @@ import psycopg2
 import requests
 import re
 from bs4 import BeautifulSoup
+from recipe_scrapers import scrape_me
 from mcp.server.fastmcp import FastMCP
 
 port_env = int(os.environ.get("PORT", 8000))
@@ -66,20 +67,13 @@ def initialize_databases():
 initialize_databases()
 
 
-# --- TEXT REPAIR CLEANERS ---
-def repair_text_data(text: str) -> str:
-    """Fixes both fractions and squished numbers so the text-to-speech reads perfectly."""
+# --- SPEECH AND FORMAT REPAIR FILTER ---
+def fix_fractions_and_times(text: str) -> str:
+    """Ensures fractions and time ranges are converted to text words so the device reads them clearly."""
     if not text:
         return ""
         
-    # 1. FIX SQUISHED TIME NUMBERS (e.g., changes '2530 minutes' into '25 to 30 minutes')
-    def split_match(match):
-        num_str = match.group(1)
-        half = len(num_str) // 2
-        return f" {num_str[:half]} to {num_str[half:]} "
-    text = re.sub(r'\b(\d{4})\s*(minutes|mins|hours|hrs)\b', split_match, text, flags=re.IGNORECASE)
-
-    # 2. FIX SLICED FRACTIONS (e.g., changes '1/2' or '1 / 2' to 'one-half' so it doesn't read as '12')
+    # 1. Convert slash fractions (e.g., '1/2' -> 'one-half', '1/4' -> 'one-fourth')
     text = re.sub(r'\b1\s*/\s*2\b', ' one-half ', text)
     text = re.sub(r'\b1\s*/\s*3\b', ' one-third ', text)
     text = re.sub(r'\b2\s*/\s*3\b', ' two-thirds ', text)
@@ -87,7 +81,7 @@ def repair_text_data(text: str) -> str:
     text = re.sub(r'\b3\s*/\s*4\b', ' three-fourths ', text)
     text = re.sub(r'\b1\s*/\s*8\b', ' one-eighth ', text)
     
-    # 3. FIX UNICODE FRACTIONS (e.g., '½' or '¼')
+    # 2. Convert Unicode fractions
     unicode_map = {
         '½': ' one-half ', '⅓': ' one-third ', '⅔': ' two-thirds ',
         '¼': ' one-fourth ', '¾': ' three-fourths ', '⅛': ' one-eighth '
@@ -95,7 +89,14 @@ def repair_text_data(text: str) -> str:
     for char, word in unicode_map.items():
         text = text.replace(char, word)
 
-    # Clean up double spacing
+    # 3. Add explicit dashes back into numbers that got squished (e.g., '25 to 30')
+    def split_match(match):
+        num_str = match.group(1)
+        half = len(num_str) // 2
+        return f" {num_str[:half]} to {num_str[half:]} "
+    text = re.sub(r'\b(\d{4})\s*(minutes|mins|hours|hrs)\b', split_match, text, flags=re.IGNORECASE)
+
+    # Clean double spaces
     text = re.sub(r' +', ' ', text)
     return text
 
@@ -136,7 +137,7 @@ def retrieve_memory(key: str) -> str:
         return f"Memory DB Error: {str(e)}"
 
 
-# --- DATABASE 2 TOOLS (RECIPES & AUTOMATED WEB SEARCHING) ---
+# --- DATABASE 2 TOOLS (RECIPES & CLEAN INTEGRATIONS) ---
 @mcp.tool()
 def search_web_for_recipe(dish_name: str) -> str:
     """Searches the internet for recipe links based on a food or dish name query."""
@@ -158,22 +159,24 @@ def search_web_for_recipe(dish_name: str) -> str:
 
 @mcp.tool()
 def search_and_scrape_recipe(url: str) -> str:
-    """Extracts raw text data from a specific cooking webpage link to read ingredients and instructions."""
+    """Extracts purely isolated ingredients and instructions from a URL, ignoring blogger fluff."""
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
-        response = requests.get(url, headers=headers, timeout=10)
-        if response.status_code != 200:
-            return f"Error code: {response.status_code}"
-        soup = BeautifulSoup(response.text, 'html.parser')
-        for script in soup(["script", "style"]):
-            script.decompose()
-            
-        raw_text = soup.get_text(separator=' \n ', strip=True)[:5000]
+        # Use specialized scraper to grab only structured recipe schemas
+        scraper = scrape_me(url, wild_mode=True)
         
-        # Filter everything through our text-repair helper before sending it to the device
-        return repair_text_data(raw_text)
+        # Pull ingredients list directly and fix formatting instantly
+        ingredients_list = scraper.ingredients()
+        clean_ingredients = "\n".join([fix_fractions_and_times(i) for i in ingredients_list])
+        
+        # Pull instructions steps directly and fix formatting instantly
+        instructions_text = scraper.instructions()
+        clean_instructions = fix_fractions_and_times(instructions_text)
+        
+        output = f"INGREDIENTS:\n{clean_ingredients}\n\nINSTRUCTIONS:\n{clean_instructions}"
+        return output
     except Exception as e:
-        return f"Scraper error: {str(e)}"
+        # Fallback to smart parsing if the main scraper hits a weird format
+        return f"Could not cleanly isolate structured ingredients on this domain: {str(e)}"
 
 @mcp.tool()
 def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, source_url: str = "") -> str:
@@ -182,9 +185,8 @@ def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, sou
         conn = get_recipe_db()
         cur = conn.cursor()
         
-        # Repair texts one final time before they land in the recipe database rows
-        clean_ingredients = repair_text_data(ingredients)
-        clean_instructions = repair_text_data(instructions)
+        clean_ingredients = fix_fractions_and_times(ingredients)
+        clean_instructions = fix_fractions_and_times(instructions)
         
         cur.execute("""
             INSERT INTO recipe_store (recipe_name, ingredients, instructions, source_url)
@@ -210,7 +212,7 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
         cur.close()
         conn.close()
         if row:
-            return f"RECIPE: {recipe_name}\n\nINGREDIENTS:\n{row}\n\nINSTRUCTIONS:\n{row}"
+            return f"RECIPE: {recipe_name}\n\nINGREDIENTS:\n{row[0]}\n\nINSTRUCTIONS:\n{row[1]}"
         return f"No recipe found for '{recipe_name}'."
     except Exception as e:
         return f"Recipe Retrieve Error: {str(e)}"
@@ -218,6 +220,7 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
 
 if __name__ == "__main__":
     mcp.run(transport="sse")
+
 
 
 
