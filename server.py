@@ -1,26 +1,19 @@
 import os
 import psycopg2
 import requests
+import re
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 
 port_env = int(os.environ.get("PORT", 8000))
 
-# FIX: We add explicit time-range handling rules to the FastMCP initialization instructions
 mcp = FastMCP(
     "AIPI_Lite_Dual_DB_Server",
     host="0.0.0.0",
-    port=port_env,
-    instructions="""
-    You are an expert culinary assistant with access to a recipe database.
-    
-    CRITICAL SPEECH RULES FOR RECIPES:
-    1. TIME RANGES: Cooking sites often write time ranges like '20-25 minutes' or '10-15 minutes'. If you see a massive four-digit time number like '2025 minutes' or '1015 minutes', you MUST recognize that this is a typo. Break it back up and speak it out loud as a time range (e.g., say 'twenty to twenty-five minutes' or 'ten to fifteen minutes'). Never tell the user to cook something for thousands of minutes.
-    
-    2. INGREDIENT AMOUNTS: Always speak and save the exact numeric amounts. Never say 'some' or 'a few' if numbers are present. Speak fractions out loud as full words (e.g., read '1/2' as 'one-half' and '1/4' as 'one-fourth').
-    """
+    port=port_env
 )
 
+# --- DATABASE CONNECTION HELPERS ---
 def get_memory_db():
     db_url = os.environ.get("DATABASE_URL")
     if not db_url:
@@ -33,6 +26,8 @@ def get_recipe_db():
         raise ValueError("CRITICAL: RECIPE_DATABASE_URL variable is missing!")
     return psycopg2.connect(db_url)
 
+
+# --- AUTOMATIC DATABASE INITIALIZATION ---
 def initialize_databases():
     try:
         conn1 = get_memory_db()
@@ -64,12 +59,30 @@ def initialize_databases():
         conn2.commit()
         cur2.close()
         conn2.close()
-        print("Databases initialized.")
+        print("Independent databases initialized.")
     except Exception as e:
-        print(f"Init Error: {e}")
+        print(f"Initialization Error: {e}")
 
 initialize_databases()
 
+
+# --- TEXT REPAIR HELPER FOR SQUISHED TIMES ---
+def repair_squished_times(text: str) -> str:
+    """Catches squished four-digit recipe times (like 2530) and splits them back up."""
+    def split_match(match):
+        num_str = match.group(1)
+        # Split '2530' into '25' and '30'
+        half = len(num_str) // 2
+        part1 = num_str[:half]
+        part2 = num_str[half:]
+        return f" {part1} to {part2} "
+
+    # Look for 4-digit numbers followed by cooking terms like 'minutes', 'mins', 'hours'
+    text = re.sub(r'\b(\d{4})\s*(minutes|mins|minutes\.|mins\.|hours|hrs)\b', split_match, text, flags=re.IGNORECASE)
+    return text
+
+
+# --- DATABASE 1 TOOLS (MEMORIES) ---
 @mcp.tool()
 def save_memory(key: str, value: str) -> str:
     """Saves a general personal memory fact to your personal memory database."""
@@ -84,9 +97,9 @@ def save_memory(key: str, value: str) -> str:
         conn.commit()
         cur.close()
         conn.close()
-        return f"SUCCESS: Saved key '{key}'."
+        return f"SUCCESS: Saved personal fact under key '{key}'."
     except Exception as e:
-        return f"Memory Error: {str(e)}"
+        return f"Memory DB Error: {str(e)}"
 
 @mcp.tool()
 def retrieve_memory(key: str) -> str:
@@ -100,10 +113,12 @@ def retrieve_memory(key: str) -> str:
         conn.close()
         if row:
             return f"Found memory: {row}"
-        return f"No memory found for key: '{key}'"
+        return f"No personal memory found for key: '{key}'"
     except Exception as e:
-        return f"Memory Error: {str(e)}"
+        return f"Memory DB Error: {str(e)}"
 
+
+# --- DATABASE 2 TOOLS (RECIPES & AUTOMATED WEB SEARCHING) ---
 @mcp.tool()
 def search_web_for_recipe(dish_name: str) -> str:
     """Searches the internet for recipe links based on a food or dish name query."""
@@ -134,7 +149,12 @@ def search_and_scrape_recipe(url: str) -> str:
         soup = BeautifulSoup(response.text, 'html.parser')
         for script in soup(["script", "style"]):
             script.decompose()
-        return soup.get_text(separator=' \n ', strip=True)[:5000]
+            
+        raw_text = soup.get_text(separator=' \n ', strip=True)[:5000]
+        
+        # AUTOMATICALLY FIX '2530 minutes' INTO '25 to 30 minutes' HERE
+        repaired_text = repair_squished_times(raw_text)
+        return repaired_text
     except Exception as e:
         return f"Scraper error: {str(e)}"
 
@@ -144,12 +164,17 @@ def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, sou
     try:
         conn = get_recipe_db()
         cur = conn.cursor()
+        
+        # Double check and clean inputs before writing to the database
+        clean_ingredients = repair_squished_times(ingredients)
+        clean_instructions = repair_squished_times(instructions)
+        
         cur.execute("""
             INSERT INTO recipe_store (recipe_name, ingredients, instructions, source_url)
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (recipe_name) 
             DO UPDATE SET ingredients = EXCLUDED.ingredients, instructions = EXCLUDED.instructions;
-        """, (recipe_name, ingredients, instructions, source_url))
+        """, (recipe_name, clean_ingredients, clean_instructions, source_url))
         conn.commit()
         cur.close()
         conn.close()
@@ -173,8 +198,10 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
     except Exception as e:
         return f"Recipe Retrieve Error: {str(e)}"
 
+
 if __name__ == "__main__":
     mcp.run(transport="sse")
+
 
 
 
