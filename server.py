@@ -7,14 +7,12 @@ mcp = FastMCP("AIPI-Core-Memories")
 DB_URL = os.environ.get("DATABASE_URL")
 
 def initialize_database():
-    """Wipes out old mixed data and builds a clean, dedicated memories table."""
+    """Wipes out any mixed data and forces a 100% blank table for personal memories."""
     if not DB_URL:
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        
-        # Fresh start: drop old tables and create a clean memories table
         cursor.execute("DROP TABLE IF EXISTS recipes;")
         cursor.execute("DROP TABLE IF EXISTS memories;")
         cursor.execute("""
@@ -27,9 +25,9 @@ def initialize_database():
         conn.commit()
         cursor.close()
         conn.close()
-        print("Core memory database wiped and reinitialized successfully!", flush=True)
+        print("Personal memories database table wiped and ready!", flush=True)
     except Exception as e:
-        print(f"Database setup failed: {str(e)}", flush=True)
+        print(f"Setup failed: {str(e)}", flush=True)
 
 @mcp.tool()
 def save_memory(content: str) -> str:
@@ -47,7 +45,7 @@ def save_memory(content: str) -> str:
 
 @mcp.tool()
 def get_memories() -> str:
-    """Retrieves all saved memories as a simple, clean text list."""
+    """Retrieves all saved memories as a simple text list."""
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
@@ -57,11 +55,7 @@ def get_memories() -> str:
         conn.close()
         if not rows:
             return "Your memory bank is currently empty."
-        
-        memory_list = []
-        for row in rows:
-            text = str(row[0]).replace("½", "1-half").replace("¼", "1-fourth").replace("¾", "3-fourths")
-            memory_list.append(f"- {text}")
+        memory_list = [f"- {str(row[0])}" for row in rows]
         return "Here are your saved memories:\n\n" + "\n".join(memory_list)
     except Exception as e:
         return f"Failed to retrieve memories: {str(e)}"
@@ -78,12 +72,13 @@ def delete_last_memory() -> str:
         conn.close()
         return "Successfully deleted your last memory entry."
     except Exception as e:
-        return f"Error deleting memory: {str(e)}"
+        return f"Error: {str(e)}"
 
 if __name__ == "__main__":
     initialize_database()
     port = int(os.environ.get("PORT", 8000))
     mcp.run(transport="sse", host="0.0.0.0", port=port)
+
 
 
 
