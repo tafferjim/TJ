@@ -6,19 +6,11 @@ from mcp.server.fastmcp import FastMCP
 
 port_env = int(os.environ.get("PORT", 8000))
 
-# We add instructions directly to the server so the AI knows how to chain the tools
+# Initialize FastMCP Server
 mcp = FastMCP(
     "AIPI_Lite_Dual_DB_Server",
     host="0.0.0.0",
-    port=port_env,
-    instructions="""
-    You are an expert culinary assistant with access to a dedicated recipe database and web tools.
-    When a user asks you to find a recipe for a food item (e.g., 'find a recipe for ???'):
-    1. First, use the 'search_web_for_recipe' tool with their query to get a list of web cooking links.
-    2. Pick the best recipe link from the results, and pass that URL into the 'search_and_scrape_recipe' tool.
-    3. Once you read the scraped ingredients and steps, extract them cleanly.
-    4. Automatically save the structured recipe using 'save_recipe_to_db' so the user has it forever.
-    """
+    port=port_env
 )
 
 # --- DATABASE CONNECTION HELPERS ---
@@ -118,7 +110,6 @@ def retrieve_memory(key: str) -> str:
 def search_web_for_recipe(dish_name: str) -> str:
     """Searches the internet for recipe links based on a food or dish name query."""
     try:
-        # Uses standard HTML searching to extract recipe domains smoothly
         search_url = f"https://duckduckgo.com{dish_name}+recipe"
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         response = requests.get(search_url, headers=headers, timeout=10)
@@ -126,7 +117,6 @@ def search_web_for_recipe(dish_name: str) -> str:
         soup = BeautifulSoup(response.text, "html.parser")
         links = []
         
-        # Look for result links on the page
         for a in soup.find_all("a", class_="result__url"):
             href = a.get("href")
             if href and "http" in href:
@@ -135,7 +125,6 @@ def search_web_for_recipe(dish_name: str) -> str:
         if not links:
             return "No recipe links found on the web for that dish."
             
-        # Return the top 3 best matching URLs to the AI
         return f"Top recipe links found:\n" + "\n".join(links[:3])
     except Exception as e:
         return f"Web search failed: {str(e)}"
@@ -144,10 +133,13 @@ def search_web_for_recipe(dish_name: str) -> str:
 def search_and_scrape_recipe(url: str) -> str:
     """Extracts raw text data from a specific cooking webpage link to read ingredients and instructions."""
     try:
-        headers = {"User-Agent": "Mozilla/5.0"}
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         response = requests.get(url, headers=headers, timeout=10)
+        
+        # FIXED TYPO HERE (Changed from status_with to status_code)
         if response.status_code != 200:
             return f"Failed to open link. Status code: {response.status_code}"
+            
         soup = BeautifulSoup(response.text, 'html.parser')
         for script in soup(["script", "style"]):
             script.decompose()
@@ -193,6 +185,7 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
 
 if __name__ == "__main__":
     mcp.run(transport="sse")
+
 
 
 
