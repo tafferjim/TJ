@@ -124,20 +124,21 @@ async def handle_tool_call(request: Request):
             "result": {"tools": TOOL_MANIFEST}
         }
 
-    # Execute actual tool modifications
+       # Execute actual tool modifications
     if tool_name == "save_memory":
+        conn = None
         try:
             conn = get_memory_db()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO memory_store (memory_key, memory_value) 
-                VALUES (%s, %s) 
-                ON CONFLICT (memory_key) 
-                DO UPDATE SET memory_value = EXCLUDED.memory_value;
-            """, (arguments.get("key"), arguments.get("value")))
-            conn.commit()
-            cur.close()
-            conn.close()
+            # 'with' handles transactions safely and automatically commits
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO memory_store (memory_key, memory_value) 
+                        VALUES (%s, %s) 
+                        ON CONFLICT (memory_key) 
+                        DO UPDATE SET memory_value = EXCLUDED.memory_value;
+                    """, (arguments.get("key"), arguments.get("value")))
+            
             return {
                 "jsonrpc": "2.0",
                 "id": body.get("id"),
@@ -149,6 +150,10 @@ async def handle_tool_call(request: Request):
                 "id": body.get("id"),
                 "result": {"content": [{"type": "text", "text": f"Database Error: {e}"}]}
             }
+        finally:
+            if conn:
+                conn.close()
+
             
     elif tool_name == "search_web_for_recipe":
         try:
