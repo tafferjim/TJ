@@ -2,6 +2,7 @@ import os
 import psycopg2
 import requests
 import re
+import uvicorn
 from bs4 import BeautifulSoup
 from recipe_scrapers import scrape_me
 from mcp.server.fastmcp import FastMCP
@@ -192,9 +193,14 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
     except Exception as e:
         return f"Recipe Retrieve Error: {str(e)}"
 
-# Run the standalone server on Render's assigned system port
+# Extract the internal web application instance from the FastMCP wrapper
+asgi_app = mcp.streamable_http_app()
+
+# FORCE DEPLOYMENT TO BIND DIRECTLY TO RENDER'S ASSIGNED PUBLIC NETWORK
 if __name__ == "__main__":
-    mcp.run(transport="sse")
+    port_env = int(os.environ.get("PORT", 10000))
+    uvicorn.run(asgi_app, host="0.0.0.0", port=port_env, log_level="info")
+
 
 
 
