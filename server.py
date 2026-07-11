@@ -1,6 +1,7 @@
 import os
 import psycopg2
 import requests
+import re
 from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 
@@ -105,6 +106,31 @@ def retrieve_memory(key: str) -> str:
         return f"Memory DB Error: {str(e)}"
 
 
+# --- FRACTION CLEANING HELPER ---
+def clean_recipe_fractions(text: str) -> str:
+    """Converts tricky fractions and slash notations into readable text for speech."""
+    # 1. Convert unicode symbols to words
+    unicode_map = {
+        '½': ' one-half ', '⅓': ' one-third ', '⅔': ' two-thirds ',
+        '¼': ' one-fourth ', '¾': ' three-fourths ', '⅛': ' one-eighth ',
+        '⅜': ' three-eighths ', '⅝': ' five-eighths ', '⅞': ' seven-eighths '
+    }
+    for char, word in unicode_map.items():
+        text = text.replace(char, word)
+        
+    # 2. Convert text fractions like 1/2 or 1/4 into words using text regex
+    text = re.sub(r'\b1/2\b', ' one-half ', text)
+    text = re.sub(r'\b1/3\b', ' one-third ', text)
+    text = re.sub(r'\b2/3\b', ' two-thirds ', text)
+    text = re.sub(r'\b1/4\b', ' one-fourth ', text)
+    text = re.sub(r'\b3/4\b', ' three-fourths ', text)
+    text = re.sub(r'\b1/8\b', ' one-eighth ', text)
+    
+    # 3. Clean up any accidental double spaces created by the swap
+    text = re.sub(r' +', ' ', text)
+    return text
+
+
 # --- DATABASE 2 TOOLS (RECIPES & AUTOMATED WEB SEARCHING) ---
 @mcp.tool()
 def search_web_for_recipe(dish_name: str) -> str:
@@ -136,14 +162,18 @@ def search_and_scrape_recipe(url: str) -> str:
         headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
         response = requests.get(url, headers=headers, timeout=10)
         
-        # FIXED TYPO HERE (Changed from status_with to status_code)
         if response.status_code != 200:
             return f"Failed to open link. Status code: {response.status_code}"
             
         soup = BeautifulSoup(response.text, 'html.parser')
         for script in soup(["script", "style"]):
             script.decompose()
-        return soup.get_text(separator=' \n ', strip=True)[:5000]
+            
+        raw_text = soup.get_text(separator=' \n ', strip=True)[:5000]
+        
+        # FIX: Filter all scraped text through the fraction cleaning filter
+        clean_text = clean_recipe_fractions(raw_text)
+        return clean_text
     except Exception as e:
         return f"Web scraper error: {str(e)}"
 
@@ -153,12 +183,17 @@ def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, sou
     try:
         conn = get_recipe_db()
         cur = conn.cursor()
+        
+        # Run clean rules on items being saved to the database as well
+        safe_ingredients = clean_recipe_fractions(ingredients)
+        safe_instructions = clean_recipe_fractions(instructions)
+        
         cur.execute("""
             INSERT INTO recipe_store (recipe_name, ingredients, instructions, source_url)
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (recipe_name) 
             DO UPDATE SET ingredients = EXCLUDED.ingredients, instructions = EXCLUDED.instructions;
-        """, (recipe_name, ingredients, instructions, source_url))
+        """, (recipe_name, safe_ingredients, safe_instructions, source_url))
         conn.commit()
         cur.close()
         conn.close()
@@ -185,6 +220,7 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
 
 if __name__ == "__main__":
     mcp.run(transport="sse")
+
 
 
 
