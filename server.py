@@ -2,8 +2,15 @@ import os
 import psycopg2
 from mcp.server.fastmcp import FastMCP
 
-# Initialize official FastMCP Server
-mcp = FastMCP("AIPI_Lite_Memory_Server")
+# Pull the network port Render gives us dynamically
+port_env = int(os.environ.get("PORT", 8000))
+
+# The library requires host and port to be configured HERE, at initialization
+mcp = FastMCP(
+    "AIPI_Lite_Memory_Server",
+    host="0.0.0.0",
+    port=port_env
+)
 
 def get_db_connection():
     db_url = os.environ.get("DATABASE_URL")
@@ -63,17 +70,15 @@ def retrieve_memory(key: str) -> str:
         cur.close()
         conn.close()
         if row:
-            return f"Found memory: {row[0]}"
+            return f"Found memory: {row}"
         return f"No memory found for key: '{key}'"
     except Exception as e:
         return f"Database Error: {str(e)}"
 
-# Start the native HTTP server directly when the script runs
 if __name__ == "__main__":
-    # Pull the network port Render gives us dynamically
-    port = int(os.environ.get("PORT", 8000))
-    # Run using the built-in Server-Sent Events (SSE) network transport
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
+    # Clean run command with NO arguments inside it
+    mcp.run(transport="sse")
+
 
 
 
