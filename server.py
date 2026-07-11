@@ -1,83 +1,87 @@
 import os
-import datetime
 import psycopg2
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("AIPI-Core-Memories")
-DB_URL = os.environ.get("DATABASE_URL")
+# Initialize FastMCP Server
+mcp = FastMCP("AIPI_Lite_Memory_Server")
+
+def get_db_connection():
+    """Establishes a connection to the PostgreSQL database."""
+    db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        raise ValueError("CRITICAL: DATABASE_URL environment variable is missing!")
+    return psycopg2.connect(db_url)
 
 def initialize_database():
-    """Wipes out any mixed data and forces a 100% blank table for personal memories."""
-    if not DB_URL:
-        return
+    """Automatically creates the memory table if it does not exist."""
     try:
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
-        cursor.execute("DROP TABLE IF EXISTS recipes;")
-        cursor.execute("DROP TABLE IF EXISTS memories;")
-        cursor.execute("""
-            CREATE TABLE memories (
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Create a simple key-value memory table
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS memory_store (
                 id SERIAL PRIMARY KEY,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                memory_text TEXT NOT NULL
+                memory_key TEXT UNIQUE NOT NULL,
+                memory_value TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
         """)
+        
         conn.commit()
-        cursor.close()
+        cur.close()
         conn.close()
-        print("Personal memories database table wiped and ready!", flush=True)
+        print("Database initialization successful or already exists.")
     except Exception as e:
-        print(f"Setup failed: {str(e)}", flush=True)
+        print(f"Error initializing database: {e}")
+
+# Run database setup immediately when the server starts
+initialize_database()
 
 @mcp.tool()
-def save_memory(content: str) -> str:
-    """Saves a standard long-term personal memory or fact about the user."""
+def save_memory(key: str, value: str) -> str:
+    """Saves or updates a memory string associated with a specific key."""
     try:
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO memories (memory_text) VALUES (%s);", (content,))
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        # Upsert: Insert new memory, or update if the key already exists
+        cur.execute("""
+            INSERT INTO memory_store (memory_key, memory_value)
+            VALUES (%s, %s)
+            ON CONFLICT (memory_key) 
+            DO UPDATE SET memory_value = EXCLUDED.memory_value;
+        """, (key, value))
+        
         conn.commit()
-        cursor.close()
+        cur.close()
         conn.close()
-        return f"Successfully saved to your long-term memory: '{content}'"
+        return f"Successfully saved memory for key: '{key}'"
     except Exception as e:
-        return f"Failed to save memory: {str(e)}"
+        return f"Database Error while saving: {str(e)}"
 
 @mcp.tool()
-def get_memories() -> str:
-    """Retrieves all saved memories as a simple text list."""
+def retrieve_memory(key: str) -> str:
+    """Retrieves a saved memory string using its key."""
     try:
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
-        cursor.execute("SELECT memory_text FROM memories ORDER BY id ASC;")
-        rows = cursor.fetchall()
-        cursor.close()
+        conn = get_db_connection()
+        cur = conn.cursor()
+        
+        cur.execute("SELECT memory_value FROM memory_store WHERE memory_key = %s;", (key,))
+        row = cur.fetchone()
+        
+        cur.close()
         conn.close()
-        if not rows:
-            return "Your memory bank is currently empty."
-        memory_list = [f"- {str(row[0])}" for row in rows]
-        return "Here are your saved memories:\n\n" + "\n".join(memory_list)
+        
+        if row:
+            return f"Memory found: {row[0]}"
+        return f"No memory found for key: '{key}'"
     except Exception as e:
-        return f"Failed to retrieve memories: {str(e)}"
+        return f"Database Error while retrieving: {str(e)}"
 
-@mcp.tool()
-def delete_last_memory() -> str:
-    """Deletes the single most recently saved memory entry."""
-    try:
-        conn = psycopg2.connect(DB_URL)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM memories WHERE id = (SELECT id FROM memories ORDER BY id DESC LIMIT 1);")
-        conn.commit()
-        cursor.close()
-        conn.close()
-        return "Successfully deleted your last memory entry."
-    except Exception as e:
-        return f"Error: {str(e)}"
+# Expose the ASGI application for Uvicorn
+app = mcp.asgi()
 
-if __name__ == "__main__":
-    initialize_database()
-    port = int(os.environ.get("PORT", 8000))
-    mcp.run(transport="sse", host="0.0.0.0", port=port)
 
 
 
