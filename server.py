@@ -55,28 +55,27 @@ def init_db():
     except Exception as e:
         print(f"Recipe init error: {e}")
 
-# Define a single, standardized source list of our tools to use across endpoints
 TOOL_MANIFEST = [
     {
-        "name": "save_memory", 
-        "description": "Saves personal facts and codes to the database.", 
+        "name": "save_memory",
+        "description": "Saves personal facts and codes to the database.",
         "inputSchema": {
-            "type": "object", 
+            "type": "object",
             "properties": {
-                "key": {"type": "string"}, 
+                "key": {"type": "string"},
                 "value": {"type": "string"}
-            }, 
+            },
             "required": ["key", "value"]
         }
     },
     {
-        "name": "search_web_for_recipe", 
-        "description": "Searches for and saves cooking recipes.", 
+        "name": "search_web_for_recipe",
+        "description": "Searches for and saves cooking recipes.",
         "inputSchema": {
-            "type": "object", 
+            "type": "object",
             "properties": {
                 "dish_name": {"type": "string"}
-            }, 
+            },
             "required": ["dish_name"]
         }
     }
@@ -89,14 +88,7 @@ async def mcp_root():
 
 @app.get("/mcp/sse")
 async def sse_endpoint(request: Request):
-    """Establishes the clean protocol streaming handshake for the hardware connection layer."""
     async def event_generator():
-        init_payload = {
-            "jsonrpc": "2.0",
-            "method": "tools/list",
-            "result": {"tools": TOOL_MANIFEST}
-        }
-        yield f"data: {json.dumps(init_payload)}\n\n"
         while True:
             if await request.is_disconnected():
                 break
@@ -106,16 +98,31 @@ async def sse_endpoint(request: Request):
 @app.post("/mcp/sse")
 @app.post("/mcp")
 async def handle_tool_call(request: Request):
-    """Answers direct tool discovery loops and executes voice tool database updates."""
     body = await request.json()
     method = body.get("method")
     params = body.get("params", {})
-    tool_name = params.get("name") or body.get("name")
-    arguments = params.get("arguments") or body.get("arguments", {})
+    tool_name = params.get("name")
+    arguments = params.get("arguments", {})
+    
+    # Standard MCP initialization/discovery requirement
+    if method == "initialize":
+        return {
+            "jsonrpc": "2.0",
+            "id": body.get("id"),
+            "result": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "RenderMemoryServer", "version": "1.0.0"}
+            }
+        }
 
-    # CRITICAL DISCOVERY FIX: Answer the dashboard's manual checking loop instantly
-    if method == "tools/list" or body.get("method") == "tools/list":
-        return {"tools": TOOL_MANIFEST}
+    # Return full manifest when the AIPI Lite discovers tools
+    if method == "tools/list":
+        return {
+            "jsonrpc": "2.0",
+            "id": body.get("id"),
+            "result": {"tools": TOOL_MANIFEST}
+        }
 
     # Execute actual tool modifications
     if tool_name == "save_memory":
@@ -125,42 +132,61 @@ async def handle_tool_call(request: Request):
             cur.execute("""
                 INSERT INTO memory_store (memory_key, memory_value) 
                 VALUES (%s, %s) 
-                ON CONFLICT (memory_key) DO UPDATE SET memory_value = EXCLUDED.memory_value;
+                ON CONFLICT (memory_key) 
+                DO UPDATE SET memory_value = EXCLUDED.memory_value;
             """, (arguments.get("key"), arguments.get("value")))
             conn.commit()
             cur.close()
             conn.close()
-            return {"content": [{"type": "text", "text": f"SUCCESS: Saved key '{arguments.get('key')}'."}]}
+            return {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved key '{arguments.get('key')}'."}]}
+            }
         except Exception as e:
-            return {"content": [{"type": "text", "text": f"Database Error: {e}"}]}
-
+            return {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "result": {"content": [{"type": "text", "text": f"Database Error: {e}"}]}
+            }
+            
     elif tool_name == "search_web_for_recipe":
         try:
             dish = arguments.get("dish_name")
             url = f"https://duckduckgo.com{dish}+recipe"
             res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
             soup = BeautifulSoup(res.text, "html.parser")
-            links = [a.get("href") for a in soup.find_all("a", class_="result__url") if a.get("href") and "http" in a.get("href")]
+            links = [a.get("href") for a in soup.find_all("a", class_="result__url") if a.get("href")]
             
             conn = get_recipe_db()
             cur = conn.cursor()
             cur.execute("""
                 INSERT INTO recipe_store (recipe_name, ingredients, instructions) 
                 VALUES (%s, %s, %s) 
-                ON CONFLICT (recipe_name) DO UPDATE SET ingredients = EXCLUDED.ingredients;
+                ON CONFLICT (recipe_name) 
+                DO UPDATE SET ingredients = EXCLUDED.ingredients;
             """, (dish, f"Source links: {', '.join(links[:2])}", "Scraped automated data text placeholders."))
             conn.commit()
             cur.close()
             conn.close()
-            return {"content": [{"type": "text", "text": f"SUCCESS: Saved a recipe for {dish}."}]}
+            return {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved a recipe for {dish}."}]}
+            }
         except Exception as e:
-            return {"content": [{"type": "text", "text": f"Search Error: {e}"}]}
+            return {
+                "jsonrpc": "2.0",
+                "id": body.get("id"),
+                "result": {"content": [{"type": "text", "text": f"Search Error: {e}"}]}
+            }
 
-    return {"error": "Unknown tool method configuration request layout."}
+    return {"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
