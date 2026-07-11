@@ -1,213 +1,125 @@
 import os
 import psycopg2
 import requests
-import re
+import json
+import asyncio
+from fastapi import FastAPI, Request
+from fastapi.responses import StreamingResponse
 from bs4 import BeautifulSoup
 from recipe_scrapers import scrape_me
-from mcp.server.fastmcp import FastMCP
 
-# Initialize FastMCP Server
-mcp = FastMCP("AIPI_Lite_Dual_DB_Server")
+app = FastAPI()
 
-# --- DATABASE CONNECTION HELPERS ---
+# --- DATABASE HELPERS ---
 def get_memory_db():
-    db_url = os.environ.get("DATABASE_URL")
-    if not db_url:
-        raise ValueError("CRITICAL: DATABASE_URL variable is missing!")
-    return psycopg2.connect(db_url)
+    return psycopg2.connect(os.environ.get("DATABASE_URL"))
 
 def get_recipe_db():
-    db_url = os.environ.get("RECIPE_DATABASE_URL")
-    if not db_url:
-        raise ValueError("CRITICAL: RECIPE_DATABASE_URL variable is missing!")
-    return psycopg2.connect(db_url)
+    return psycopg2.connect(os.environ.get("RECIPE_DATABASE_URL"))
 
+# --- AUTOMATIC TABLE BUILDER ---
+@app.on_event("startup")
+def init_db():
+    for db_func, table_query in [
+        (get_memory_db, "CREATE TABLE IF NOT EXISTS memory_store (id SERIAL PRIMARY KEY, memory_key TEXT UNIQUE NOT NULL, memory_value TEXT NOT NULL, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);"),
+        (get_recipe_db, "CREATE TABLE IF NOT EXISTS recipe_store (id SERIAL PRIMARY KEY, recipe_name TEXT UNIQUE NOT NULL, ingredients TEXT NOT NULL, instructions TEXT NOT NULL, source_url TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP);")
+    ]:
+        try:
+            conn = db_func()
+            cur = conn.cursor()
+            cur.execute(table_query)
+            conn.commit()
+            cur.close()
+            conn.close()
+        except Exception as e:
+            print(f"Table init error: {e}")
 
-# --- AUTOMATIC DATABASE INITIALIZATION ---
-def initialize_databases():
-    try:
-        conn1 = get_memory_db()
-        cur1 = conn1.cursor()
-        cur1.execute("""
-            CREATE TABLE IF NOT EXISTS memory_store (
-                id SERIAL PRIMARY KEY,
-                memory_key TEXT UNIQUE NOT NULL,
-                memory_value TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn1.commit()
-        cur1.close()
-        conn1.close()
-        
-        conn2 = get_recipe_db()
-        cur2 = conn2.cursor()
-        cur2.execute("""
-            CREATE TABLE IF NOT EXISTS recipe_store (
-                id SERIAL PRIMARY KEY,
-                recipe_name TEXT UNIQUE NOT NULL,
-                ingredients TEXT NOT NULL,
-                instructions TEXT NOT NULL,
-                source_url TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn2.commit()
-        cur2.close()
-        conn2.close()
-        print("Independent databases initialized.")
-    except Exception as e:
-        print(f"Initialization Error: {e}")
-
-initialize_databases()
-
-
-# --- SPEECH AND FORMAT REPAIR FILTER ---
-def fix_fractions_and_times(text: str) -> str:
-    if not text:
-        return ""
-    text = re.sub(r'\b1\s*/\s*2\b', ' one-half ', text)
-    text = re.sub(r'\b1\s*/\s*3\b', ' one-third ', text)
-    text = re.sub(r'\b2\s*/\s*3\b', ' two-thirds ', text)
-    text = re.sub(r'\b1\s*/\s*4\b', ' one-fourth ', text)
-    text = re.sub(r'\b3\s*/\s*4\b', ' three-fourths ', text)
-    text = re.sub(r'\b1\s*/\s*8\b', ' one-eighth ', text)
-    
-    unicode_map = {
-        '½': ' one-half ', '⅓': ' one-third ', '⅔': ' two-thirds ',
-        '¼': ' one-fourth ', '¾': ' three-fourths ', '⅛': ' one-eighth '
-    }
-    for char, word in unicode_map.items():
-        text = text.replace(char, word)
-
-    def split_match(match):
-        num_str = match.group(1)
-        half = len(num_str) // 2
-        return f" {num_str[:half]} to {num_str[half:]} "
-    text = re.sub(r'\b(\d{4})\s*(minutes|mins|hours|hrs)\b', split_match, text, flags=re.IGNORECASE)
-    return re.sub(r' +', ' ', text).strip()
-
-
-# --- DATABASE 1 TOOLS (MEMORIES) ---
-@mcp.tool()
-def save_memory(key: str, value: str) -> str:
-    """Saves a general personal memory fact to your personal memory database."""
-    try:
-        conn = get_memory_db()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO memory_store (memory_key, memory_value)
-            VALUES (%s, %s)
-            ON CONFLICT (memory_key) DO UPDATE SET memory_value = EXCLUDED.memory_value;
-        """, (key, value))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return f"SUCCESS: Saved personal fact under key '{key}'."
-    except Exception as e:
-        return f"Memory DB Error: {str(e)}"
-
-@mcp.tool()
-def retrieve_memory(key: str) -> str:
-    """Retrieves a general personal memory fact from your personal memory database."""
-    try:
-        conn = get_memory_db()
-        cur = conn.cursor()
-        cur.execute("SELECT memory_value FROM memory_store WHERE memory_key = %s;", (key,))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if row:
-            return f"Found memory: {row}"
-        return f"No personal memory found for key: '{key}'"
-    except Exception as e:
-        return f"Memory DB Error: {str(e)}"
-
-
-# --- DATABASE 2 TOOLS (RECIPES & AUTOMATED WEB SEARCHING) ---
-@mcp.tool()
-def search_web_for_recipe(dish_name: str) -> str:
-    """Searches the internet for recipe links using explicit browser header emulation."""
-    try:
-        # Fixed search endpoint with clean fallback text search mapping
-        search_url = f"https://duckduckgo.com{dish_name}+recipe"
-        
-        # CRITICAL FIX: Explicit security headers to bypass the 403 network blocks
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-            "Accept-Language": "en-US,en;q=0.5"
+# --- HARDWARE SSE GATEWAY CONNECTION HANDSHAKE ---
+@app.get("/mcp/sse")
+async def sse_endpoint(request: Request):
+    """Establishes the exact legacy SSE live stream line your AIPI Lite demands."""
+    async def event_generator():
+        # Send initial MCP protocol handshake to tell the hardware the tools exist
+        init_payload = {
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "result": {
+                "tools": [
+                    {"name": "save_memory", "description": "Saves general memory facts.", "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"]}},
+                    {"name": "search_web_for_recipe", "description": "Searches the web for recipe links.", "inputSchema": {"type": "object", "properties": {"dish_name": {"type": "string"}}, "required": ["dish_name"]}},
+                    {"name": "save_recipe_to_db", "description": "Saves structured recipes.", "inputSchema": {"type": "object", "properties": {"recipe_name": {"type": "string"}, "ingredients": {"type": "string"}, "instructions": {"type": "string"}}, "required": ["recipe_name", "ingredients", "instructions"]}}
+                ]
+            }
         }
-        
-        response = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, "html.parser")
-        links = []
-        
-        for a in soup.find_all("a", class_="result__url"):
-            href = a.get("href")
-            if href and "http" in href:
-                links.append(href)
-        if not links:
-            return "No recipe links found on the web."
-        return f"Top recipe links found:\n" + "\n".join(links[:3])
-    except Exception as e:
-        return f"Search failed: {str(e)}"
+        yield f"data: {json.dumps(init_payload)}\n\n"
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(5)
 
-@mcp.tool()
-def search_and_scrape_recipe(url: str) -> str:
-    """Extracts purely isolated ingredients and instructions from a URL, ignoring blogger fluff."""
-    try:
-        scraper = scrape_me(url, wild_mode=True)
-        ingredients_list = scraper.ingredients()
-        clean_ingredients = "\n".join([fix_fractions_and_times(i) for i in ingredients_list])
-        instructions_text = scraper.instructions()
-        clean_instructions = fix_fractions_and_times(instructions_text)
-        return f"INGREDIENTS:\n{clean_ingredients}\n\nINSTRUCTIONS:\n{clean_instructions}"
-    except Exception as e:
-        return f"Could not isolate structured data: {str(e)}"
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@mcp.tool()
-def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, source_url: str = "") -> str:
-    """Saves a structured food recipe exclusively into your private recipe database."""
-    try:
-        conn = get_recipe_db()
-        cur = conn.cursor()
-        cur.execute("""
-            INSERT INTO recipe_store (recipe_name, ingredients, instructions, source_url)
-            VALUES (%s, %s, %s, %s)
-            ON CONFLICT (recipe_name) 
-            DO UPDATE SET ingredients = EXCLUDED.ingredients, instructions = EXCLUDED.instructions;
-        """, (recipe_name, ingredients, instructions, source_url))
-        conn.commit()
-        cur.close()
-        conn.close()
-        return f"SUCCESS: Saved '{recipe_name}' into recipe database."
-    except Exception as e:
-        return f"Recipe Save Error: {str(e)}"
+# --- CORE EXECUTION ROUTE FOR HANDSHAKE CONTROLS ---
+@app.post("/mcp/sse")
+async def handle_tool_call(request: Request):
+    body = await request.json()
+    method = body.get("method")
+    params = body.get("params", {})
+    tool_name = params.get("name")
+    arguments = params.get("arguments", {})
 
-@mcp.tool()
-def retrieve_recipe_from_db(recipe_name: str) -> str:
-    """Searches your isolated recipe database for a saved dish."""
-    try:
-        conn = get_recipe_db()
-        cur = conn.cursor()
-        cur.execute("SELECT ingredients, instructions FROM recipe_store WHERE recipe_name ILIKE %s;", (f"%{recipe_name}%",))
-        row = cur.fetchone()
-        cur.close()
-        conn.close()
-        if row:
-            return f"RECIPE: {recipe_name}\n\nINGREDIENTS:\n{row}\n\nINSTRUCTIONS:\n{row}"
-        return f"No recipe found for '{recipe_name}'."
-    except Exception as e:
-        return f"Recipe Retrieve Error: {str(e)}"
+    # 1. Handle tool discovery request
+    if method == "tools/list":
+        return {
+            "tools": [
+                {"name": "save_memory", "description": "Saves personal facts.", "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"]}},
+                {"name": "search_web_for_recipe", "description": "Searches for cooking links.", "inputSchema": {"type": "object", "properties": {"dish_name": {"type": "string"}}, "required": ["dish_name"]}},
+                {"name": "save_recipe_to_db", "description": "Saves recipes directly to database.", "inputSchema": {"type": "object", "properties": {"recipe_name": {"type": "string"}, "ingredients": {"type": "string"}, "instructions": {"type": "string"}}, "required": ["recipe_name", "ingredients", "instructions"]}}
+            ]
+        }
 
-# Extract the internal web application instance from the FastMCP wrapper
-asgi_app = mcp.streamable_http_app()
+    # 2. Handle actual tool executions
+    if method == "tools/call":
+        if tool_name == "save_memory":
+            try:
+                conn = get_memory_db()
+                cur = conn.cursor()
+                cur.execute("INSERT INTO memory_store (memory_key, memory_value) VALUES (%s, %s) ON CONFLICT (memory_key) DO UPDATE SET memory_value = EXCLUDED.memory_value;", (arguments.get("key"), arguments.get("value")))
+                conn.commit()
+                cur.close()
+                conn.close()
+                return {"content": [{"type": "text", "text": f"SUCCESS: Saved key '{arguments.get('key')}' to database."}]}
+            except Exception as e:
+                return {"content": [{"type": "text", "text": f"Error: {e}"}]}
+
+        elif tool_name == "search_web_for_recipe":
+            try:
+                url = f"https://duckduckgo.com{arguments.get('dish_name')}+recipe"
+                res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
+                soup = BeautifulSoup(res.text, "html.parser")
+                links = [a.get("href") for a in soup.find_all("a", class_="result__url") if a.get("href") and "http" in a.get("href")]
+                return {"content": [{"type": "text", "text": f"Links: {', '.join(links[:2])}"}]}
+            except Exception as e:
+                return {"content": [{"type": "text", "text": f"Search failed: {e}"}]}
+
+        elif tool_name == "save_recipe_to_db":
+            try:
+                conn = get_recipe_db()
+                cur = conn.cursor()
+                cur.execute("INSERT INTO recipe_store (recipe_name, ingredients, instructions) VALUES (%s, %s, %s) ON CONFLICT (recipe_name) DO UPDATE SET ingredients = EXCLUDED.ingredients, instructions = EXCLUDED.instructions;", (arguments.get("recipe_name"), arguments.get("ingredients"), arguments.get("instructions")))
+                conn.commit()
+                cur.close()
+                conn.close()
+                return {"content": [{"type": "text", "text": "SUCCESS: Recipe stored."}]}
+            except Exception as e:
+                return {"content": [{"type": "text", "text": f"Error: {e}"}]}
+
+    return {"error": "Unknown method or tool"}
 
 if __name__ == "__main__":
     import uvicorn
-    port_env = int(os.environ.get("PORT", 10000))
-    uvicorn.run(asgi_app, host="0.0.0.0", port=port_env, log_level="info")
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
