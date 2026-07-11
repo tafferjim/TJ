@@ -1,12 +1,9 @@
 import os
 import psycopg2
-from fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP
 
-# We add instructions directly to the server so the AI knows it MUST use it for memories
-mcp = FastMCP(
-    "AIPI_Lite_Memory_Server",
-    instructions="You are a memory assistant. Every time the user asks you to remember, save, store, or recall information, you MUST use the save_memory or retrieve_memory tools. Do not just keep it in mind; always write it to the external database."
-)
+# Initialize official FastMCP Server
+mcp = FastMCP("AIPI_Lite_Memory_Server")
 
 def get_db_connection():
     db_url = os.environ.get("DATABASE_URL")
@@ -29,10 +26,11 @@ def initialize_database():
         conn.commit()
         cur.close()
         conn.close()
-        print("Database initialized.")
+        print("Database initialized successfully.")
     except Exception as e:
         print(f"Error initializing database: {e}")
 
+# Run setup
 initialize_database()
 
 @mcp.tool()
@@ -50,9 +48,9 @@ def save_memory(key: str, value: str) -> str:
         conn.commit()
         cur.close()
         conn.close()
-        return f"SUCCESS: Memory saved under key '{key}'."
+        return f"SUCCESS: Saved key '{key}'."
     except Exception as e:
-        return f"Database Error while saving: {str(e)}"
+        return f"Database Error: {str(e)}"
 
 @mcp.tool()
 def retrieve_memory(key: str) -> str:
@@ -68,10 +66,15 @@ def retrieve_memory(key: str) -> str:
             return f"Found memory: {row[0]}"
         return f"No memory found for key: '{key}'"
     except Exception as e:
-        return f"Database Error while retrieving: {str(e)}"
+        return f"Database Error: {str(e)}"
 
-# The modern, official way to export the app for Uvicorn
-app = mcp.streamable_http_app()
+# Start the native HTTP server directly when the script runs
+if __name__ == "__main__":
+    # Pull the network port Render gives us dynamically
+    port = int(os.environ.get("PORT", 8000))
+    # Run using the built-in Server-Sent Events (SSE) network transport
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
+
 
 
 
