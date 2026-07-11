@@ -6,13 +6,8 @@ from bs4 import BeautifulSoup
 from recipe_scrapers import scrape_me
 from mcp.server.fastmcp import FastMCP
 
-port_env = int(os.environ.get("PORT", 8000))
-
-mcp = FastMCP(
-    "AIPI_Lite_Dual_DB_Server",
-    host="0.0.0.0",
-    port=port_env
-)
+# Initialize FastMCP Server
+mcp = FastMCP("AIPI_Lite_Dual_DB_Server")
 
 # --- DATABASE CONNECTION HELPERS ---
 def get_memory_db():
@@ -69,11 +64,8 @@ initialize_databases()
 
 # --- SPEECH AND FORMAT REPAIR FILTER ---
 def fix_fractions_and_times(text: str) -> str:
-    """Ensures fractions and time ranges are converted to text words so the device reads them clearly."""
     if not text:
         return ""
-        
-    # 1. Convert slash fractions (e.g., '1/2' -> 'one-half', '1/4' -> 'one-fourth')
     text = re.sub(r'\b1\s*/\s*2\b', ' one-half ', text)
     text = re.sub(r'\b1\s*/\s*3\b', ' one-third ', text)
     text = re.sub(r'\b2\s*/\s*3\b', ' two-thirds ', text)
@@ -81,7 +73,6 @@ def fix_fractions_and_times(text: str) -> str:
     text = re.sub(r'\b3\s*/\s*4\b', ' three-fourths ', text)
     text = re.sub(r'\b1\s*/\s*8\b', ' one-eighth ', text)
     
-    # 2. Convert Unicode fractions
     unicode_map = {
         '½': ' one-half ', '⅓': ' one-third ', '⅔': ' two-thirds ',
         '¼': ' one-fourth ', '¾': ' three-fourths ', '⅛': ' one-eighth '
@@ -89,16 +80,12 @@ def fix_fractions_and_times(text: str) -> str:
     for char, word in unicode_map.items():
         text = text.replace(char, word)
 
-    # 3. Add explicit dashes back into numbers that got squished (e.g., '25 to 30')
     def split_match(match):
         num_str = match.group(1)
         half = len(num_str) // 2
         return f" {num_str[:half]} to {num_str[half:]} "
     text = re.sub(r'\b(\d{4})\s*(minutes|mins|hours|hrs)\b', split_match, text, flags=re.IGNORECASE)
-
-    # Clean double spaces
-    text = re.sub(r' +', ' ', text)
-    return text
+    return re.sub(r' +', ' ', text).strip()
 
 
 # --- DATABASE 1 TOOLS (MEMORIES) ---
@@ -137,7 +124,7 @@ def retrieve_memory(key: str) -> str:
         return f"Memory DB Error: {str(e)}"
 
 
-# --- DATABASE 2 TOOLS (RECIPES & CLEAN INTEGRATIONS) ---
+# --- DATABASE 2 TOOLS (RECIPES & AUTOMATED WEB SEARCHING) ---
 @mcp.tool()
 def search_web_for_recipe(dish_name: str) -> str:
     """Searches the internet for recipe links based on a food or dish name query."""
@@ -161,22 +148,14 @@ def search_web_for_recipe(dish_name: str) -> str:
 def search_and_scrape_recipe(url: str) -> str:
     """Extracts purely isolated ingredients and instructions from a URL, ignoring blogger fluff."""
     try:
-        # Use specialized scraper to grab only structured recipe schemas
         scraper = scrape_me(url, wild_mode=True)
-        
-        # Pull ingredients list directly and fix formatting instantly
         ingredients_list = scraper.ingredients()
         clean_ingredients = "\n".join([fix_fractions_and_times(i) for i in ingredients_list])
-        
-        # Pull instructions steps directly and fix formatting instantly
         instructions_text = scraper.instructions()
         clean_instructions = fix_fractions_and_times(instructions_text)
-        
-        output = f"INGREDIENTS:\n{clean_ingredients}\n\nINSTRUCTIONS:\n{clean_instructions}"
-        return output
+        return f"INGREDIENTS:\n{clean_ingredients}\n\nINSTRUCTIONS:\n{clean_instructions}"
     except Exception as e:
-        # Fallback to smart parsing if the main scraper hits a weird format
-        return f"Could not cleanly isolate structured ingredients on this domain: {str(e)}"
+        return f"Could not isolate structured data: {str(e)}"
 
 @mcp.tool()
 def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, source_url: str = "") -> str:
@@ -184,16 +163,12 @@ def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, sou
     try:
         conn = get_recipe_db()
         cur = conn.cursor()
-        
-        clean_ingredients = fix_fractions_and_times(ingredients)
-        clean_instructions = fix_fractions_and_times(instructions)
-        
         cur.execute("""
             INSERT INTO recipe_store (recipe_name, ingredients, instructions, source_url)
             VALUES (%s, %s, %s, %s)
             ON CONFLICT (recipe_name) 
             DO UPDATE SET ingredients = EXCLUDED.ingredients, instructions = EXCLUDED.instructions;
-        """, (recipe_name, clean_ingredients, clean_instructions, source_url))
+        """, (recipe_name, ingredients, instructions, source_url))
         conn.commit()
         cur.close()
         conn.close()
@@ -212,14 +187,14 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
         cur.close()
         conn.close()
         if row:
-            return f"RECIPE: {recipe_name}\n\nINGREDIENTS:\n{row[0]}\n\nINSTRUCTIONS:\n{row[1]}"
+            return f"RECIPE: {recipe_name}\n\nINGREDIENTS:\n{row}\n\nINSTRUCTIONS:\n{row}"
         return f"No recipe found for '{recipe_name}'."
     except Exception as e:
         return f"Recipe Retrieve Error: {str(e)}"
 
+# CRITICAL FIX: Expose the ASGI gateway mapping layer natively for Uvicorn
+app = mcp.asgi()
 
-if __name__ == "__main__":
-    mcp.run(transport="sse")
 
 
 
