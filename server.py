@@ -8,19 +8,15 @@ mcp = FastMCP("AIPI-Memories-Extension")
 DB_URL = os.environ.get("DATABASE_URL")
 
 def initialize_database():
-    """Wipes out old data automatically on startup and sets up clean, separated tables."""
+    """Automatically sets up both separate tables on launch inside your paid database."""
     if not DB_URL:
-        print("DATABASE_URL not found. Skipping initialization.", flush=True)
+        print("DATABASE_URL environment variable is missing. Skipping table check.", flush=True)
         return
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
         
-        print("Wiping out old messy database records...", flush=True)
-        # 1. This instantly drops and clears your old messy memory table layout
-        cursor.execute("DROP TABLE IF EXISTS memories;")
-        
-        # 2. This builds a fresh, clean general memories table
+        # Table 1: Isolated space for standard personal text logs
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS memories (
                 id SERIAL PRIMARY KEY,
@@ -29,7 +25,7 @@ def initialize_database():
             );
         """)
         
-        # 3. This builds your brand-new, isolated recipe cookbook table
+        # Table 2: Isolated space for structured recipes 
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS recipes (
                 id SERIAL PRIMARY KEY,
@@ -43,17 +39,17 @@ def initialize_database():
         conn.commit()
         cursor.close()
         conn.close()
-        print("Database wiped clean and rebuilt successfully!", flush=True)
+        print("Database tables initialized successfully side-by-side!", flush=True)
     except Exception as e:
-        print(f"Database initialization failed: {str(e)}", flush=True)
+        print(f"Database table setup failed: {str(e)}", flush=True)
 
 def clean_hardware_text(text: str) -> str:
-    """Converts complex fraction symbols to words to completely stop screen rendering bugs."""
+    """Safely converts complex symbols to words to eliminate box characters on the screen."""
     if not text:
         return ""
     return text.replace("½", " 1-half ").replace("¼", " 1-fourth ").replace("¾", " 3-fourths ")
 
-# ==================== GENERAL MEMORY TOOLS ====================
+# ==================== PERSONAL MEMORY TOOLS ====================
 
 @mcp.tool()
 def save_memory(content: str) -> str:
@@ -65,13 +61,13 @@ def save_memory(content: str) -> str:
         conn.commit()
         cursor.close()
         conn.close()
-        return f"Saved to memories: '{content}'"
+        return f"Saved to memories index: '{content}'"
     except Exception as e:
         return f"Error saving memory: {str(e)}"
 
 @mcp.tool()
 def delete_last_memory() -> str:
-    """Deletes the most recent general memory entry."""
+    """Deletes the most recent general memory entry from the memories table."""
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
@@ -79,7 +75,7 @@ def delete_last_memory() -> str:
         conn.commit()
         cursor.close()
         conn.close()
-        return "Successfully deleted your last general memory."
+        return "Successfully deleted your last general memory entry."
     except Exception as e:
         return f"Error: {str(e)}"
 
@@ -93,8 +89,8 @@ def get_local_time() -> str:
 
 @mcp.tool()
 def get_local_weather(city: str = "Austin") -> str:
-    """Fetches weather for a city."""
-    api_key = "YOUR_OPENWEATHERMAP_API_KEY" # Add your real key here if you use it
+    """Fetches weather for a city. Defaults to Austin."""
+    api_key = "YOUR_OPENWEATHERMAP_API_KEY" # Replace with your real key if needed
     if api_key == "YOUR_OPENWEATHERMAP_API_KEY":
         return "Error: Weather API key not configured."
     url = f"https://openweathermap.org{city}&appid={api_key}&units=imperial"
@@ -106,11 +102,11 @@ def get_local_weather(city: str = "Austin") -> str:
     except Exception as e:
         return f"Error fetching weather: {str(e)}"
 
-# ==================== DEDICATED RECIPE TOOLS ====================
+# ==================== SEPARATED RECIPE TOOLS ====================
 
 @mcp.tool()
 def save_recipe(recipe_name: str, ingredients: str, instructions: str) -> str:
-    """Saves a structured cooking recipe safely into the recipe book database table."""
+    """Saves a structured recipe safely into the dedicated recipe book database table."""
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
@@ -169,5 +165,6 @@ if __name__ == "__main__":
     initialize_database()
     port = int(os.environ.get("PORT", 8000))
     mcp.run(transport="sse", host="0.0.0.0", port=port)
+
 
 
