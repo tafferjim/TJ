@@ -66,19 +66,37 @@ def initialize_databases():
 initialize_databases()
 
 
-# --- TEXT REPAIR HELPER FOR SQUISHED TIMES ---
-def repair_squished_times(text: str) -> str:
-    """Catches squished four-digit recipe times (like 2530) and splits them back up."""
+# --- TEXT REPAIR CLEANERS ---
+def repair_text_data(text: str) -> str:
+    """Fixes both fractions and squished numbers so the text-to-speech reads perfectly."""
+    if not text:
+        return ""
+        
+    # 1. FIX SQUISHED TIME NUMBERS (e.g., changes '2530 minutes' into '25 to 30 minutes')
     def split_match(match):
         num_str = match.group(1)
-        # Split '2530' into '25' and '30'
         half = len(num_str) // 2
-        part1 = num_str[:half]
-        part2 = num_str[half:]
-        return f" {part1} to {part2} "
+        return f" {num_str[:half]} to {num_str[half:]} "
+    text = re.sub(r'\b(\d{4})\s*(minutes|mins|hours|hrs)\b', split_match, text, flags=re.IGNORECASE)
 
-    # Look for 4-digit numbers followed by cooking terms like 'minutes', 'mins', 'hours'
-    text = re.sub(r'\b(\d{4})\s*(minutes|mins|minutes\.|mins\.|hours|hrs)\b', split_match, text, flags=re.IGNORECASE)
+    # 2. FIX SLICED FRACTIONS (e.g., changes '1/2' or '1 / 2' to 'one-half' so it doesn't read as '12')
+    text = re.sub(r'\b1\s*/\s*2\b', ' one-half ', text)
+    text = re.sub(r'\b1\s*/\s*3\b', ' one-third ', text)
+    text = re.sub(r'\b2\s*/\s*3\b', ' two-thirds ', text)
+    text = re.sub(r'\b1\s*/\s*4\b', ' one-fourth ', text)
+    text = re.sub(r'\b3\s*/\s*4\b', ' three-fourths ', text)
+    text = re.sub(r'\b1\s*/\s*8\b', ' one-eighth ', text)
+    
+    # 3. FIX UNICODE FRACTIONS (e.g., '½' or '¼')
+    unicode_map = {
+        '½': ' one-half ', '⅓': ' one-third ', '⅔': ' two-thirds ',
+        '¼': ' one-fourth ', '¾': ' three-fourths ', '⅛': ' one-eighth '
+    }
+    for char, word in unicode_map.items():
+        text = text.replace(char, word)
+
+    # Clean up double spacing
+    text = re.sub(r' +', ' ', text)
     return text
 
 
@@ -152,9 +170,8 @@ def search_and_scrape_recipe(url: str) -> str:
             
         raw_text = soup.get_text(separator=' \n ', strip=True)[:5000]
         
-        # AUTOMATICALLY FIX '2530 minutes' INTO '25 to 30 minutes' HERE
-        repaired_text = repair_squished_times(raw_text)
-        return repaired_text
+        # Filter everything through our text-repair helper before sending it to the device
+        return repair_text_data(raw_text)
     except Exception as e:
         return f"Scraper error: {str(e)}"
 
@@ -165,9 +182,9 @@ def save_recipe_to_db(recipe_name: str, ingredients: str, instructions: str, sou
         conn = get_recipe_db()
         cur = conn.cursor()
         
-        # Double check and clean inputs before writing to the database
-        clean_ingredients = repair_squished_times(ingredients)
-        clean_instructions = repair_squished_times(instructions)
+        # Repair texts one final time before they land in the recipe database rows
+        clean_ingredients = repair_text_data(ingredients)
+        clean_instructions = repair_text_data(instructions)
         
         cur.execute("""
             INSERT INTO recipe_store (recipe_name, ingredients, instructions, source_url)
@@ -201,6 +218,7 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
 
 if __name__ == "__main__":
     mcp.run(transport="sse")
+
 
 
 
