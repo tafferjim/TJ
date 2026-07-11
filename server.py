@@ -6,7 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 port_env = int(os.environ.get("PORT", 8000))
 
-# We use strict instructions to force the AI model to handle fractions perfectly
+# FIX: We add explicit time-range handling rules to the FastMCP initialization instructions
 mcp = FastMCP(
     "AIPI_Lite_Dual_DB_Server",
     host="0.0.0.0",
@@ -14,15 +14,10 @@ mcp = FastMCP(
     instructions="""
     You are an expert culinary assistant with access to a recipe database.
     
-    CRITICAL SPEECH RULES FOR INGREDIENTS:
-    When reading or saving ingredients, you MUST read and write the EXACT numeric amounts. 
-    Never say 'some' or 'a few' if a number is available. 
-    To prevent speech stuttering on fractions, always speak fractional slashes out loud as full words:
-    - Change '1/2' or '½' to 'one-half' when speaking.
-    - Change '1/4' or '¼' to 'one-fourth' when speaking.
-    - Change '3/4' or '¾' to 'three-fourths' when speaking.
-    - Change '1/3' or '⅓' to 'one-third' when speaking.
-    Always give the precise measurements!
+    CRITICAL SPEECH RULES FOR RECIPES:
+    1. TIME RANGES: Cooking sites often write time ranges like '20-25 minutes' or '10-15 minutes'. If you see a massive four-digit time number like '2025 minutes' or '1015 minutes', you MUST recognize that this is a typo. Break it back up and speak it out loud as a time range (e.g., say 'twenty to twenty-five minutes' or 'ten to fifteen minutes'). Never tell the user to cook something for thousands of minutes.
+    
+    2. INGREDIENT AMOUNTS: Always speak and save the exact numeric amounts. Never say 'some' or 'a few' if numbers are present. Speak fractions out loud as full words (e.g., read '1/2' as 'one-half' and '1/4' as 'one-fourth').
     """
 )
 
@@ -69,7 +64,7 @@ def initialize_databases():
         conn2.commit()
         cur2.close()
         conn2.close()
-        print("Databases fully ready.")
+        print("Databases initialized.")
     except Exception as e:
         print(f"Init Error: {e}")
 
@@ -173,13 +168,14 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
         cur.close()
         conn.close()
         if row:
-            return f"RECIPE: {recipe_name}\n\nINGREDIENTS:\n{row[0]}\n\nINSTRUCTIONS:\n{row[1]}"
+            return f"RECIPE: {recipe_name}\n\nINGREDIENTS:\n{row}\n\nINSTRUCTIONS:\n{row}"
         return f"No recipe found for '{recipe_name}'."
     except Exception as e:
         return f"Recipe Retrieve Error: {str(e)}"
 
 if __name__ == "__main__":
     mcp.run(transport="sse")
+
 
 
 
