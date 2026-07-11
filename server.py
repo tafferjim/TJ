@@ -81,15 +81,12 @@ TOOL_MANIFEST = [
     }
 ]
 
-# ==========================================
-# REPLACE EVERYTHING FROM THIS POINT FORWARD:
-# ==========================================
-
 @app.get("/mcp/")
 @app.get("/mcp")
 async def mcp_root():
     return {"status": "active", "transport": "http"}
 
+@app.post("/mcp/")
 @app.post("/mcp")
 async def handle_tool_call(request: Request):
     """Answers tool discovery loops and executes updates over standard HTTP POST."""
@@ -101,13 +98,16 @@ async def handle_tool_call(request: Request):
     method = body.get("method")
     params = body.get("params", {})
     
-    # Handle implicit/explicit tool name lookups
-    tool_name = params.get("name") or body.get("name")
-    arguments = params.get("arguments") or body.get("arguments", {})
+    if method in ["tools/call", "mcp.tools/call"]:
+        tool_name = params.get("name")
+        arguments = params.get("arguments", {})
+    else:
+        tool_name = params.get("name") or body.get("name")
+        arguments = params.get("arguments") or body.get("arguments", {})
+        
     request_id = body.get("id")
 
-    # Standard MCP initialization/discovery handshake
-    if method == "initialize" or method == "mcp.initialize":
+    if method in ["initialize", "mcp.initialize"]:
         return {
             "jsonrpc": "2.0",
             "id": request_id,
@@ -118,15 +118,13 @@ async def handle_tool_call(request: Request):
             }
         }
 
-    # Return full manifest when discovering available options
-    if method == "tools/list" or method == "mcp.tools/list":
+    if method in ["tools/list", "mcp.tools/list"]:
         return {
             "jsonrpc": "2.0",
             "id": request_id,
             "result": {"tools": TOOL_MANIFEST}
         }
 
-    # Execute actual tool modifications
     if tool_name == "save_memory":
         conn = None
         try:
@@ -194,6 +192,7 @@ async def handle_tool_call(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
