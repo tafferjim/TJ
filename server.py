@@ -55,26 +55,46 @@ def init_db():
     except Exception as e:
         print(f"Recipe init error: {e}")
 
-# --- FIX: THE MANDATORY MANIFEST DISCOVERY PATH FOR THE DASHBOARD ---
+# Define a single, standardized source list of our tools to use across endpoints
+TOOL_MANIFEST = [
+    {
+        "name": "save_memory", 
+        "description": "Saves personal facts and codes to the database.", 
+        "inputSchema": {
+            "type": "object", 
+            "properties": {
+                "key": {"type": "string"}, 
+                "value": {"type": "string"}
+            }, 
+            "required": ["key", "value"]
+        }
+    },
+    {
+        "name": "search_web_for_recipe", 
+        "description": "Searches for and saves cooking recipes.", 
+        "inputSchema": {
+            "type": "object", 
+            "properties": {
+                "dish_name": {"type": "string"}
+            }, 
+            "required": ["dish_name"]
+        }
+    }
+]
+
 @app.get("/mcp/")
 @app.get("/mcp")
 async def mcp_root():
-    """Tells the AIPI Dashboard that the server is alive and where to go."""
     return {"status": "active", "transport": "sse", "endpoint": "/mcp/sse"}
 
 @app.get("/mcp/sse")
 async def sse_endpoint(request: Request):
-    """Clean protocol handshake stream for the physical hardware connection layer."""
+    """Establishes the clean protocol streaming handshake for the hardware connection layer."""
     async def event_generator():
         init_payload = {
             "jsonrpc": "2.0",
             "method": "tools/list",
-            "result": {
-                "tools": [
-                    {"name": "save_memory", "description": "Saves personal facts and codes.", "inputSchema": {"type": "object", "properties": {"key": {"type": "string"}, "value": {"type": "string"}}, "required": ["key", "value"]}},
-                    {"name": "search_web_for_recipe", "description": "Searches for cooking recipes.", "inputSchema": {"type": "object", "properties": {"dish_name": {"type": "string"}}, "required": ["dish_name"]}}
-                ]
-            }
+            "result": {"tools": TOOL_MANIFEST}
         }
         yield f"data: {json.dumps(init_payload)}\n\n"
         while True:
@@ -84,13 +104,20 @@ async def sse_endpoint(request: Request):
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.post("/mcp/sse")
+@app.post("/mcp")
 async def handle_tool_call(request: Request):
-    """Executes direct database insertions based on the device's voice signals."""
+    """Answers direct tool discovery loops and executes voice tool database updates."""
     body = await request.json()
+    method = body.get("method")
     params = body.get("params", {})
-    tool_name = params.get("name")
-    arguments = params.get("arguments", {})
+    tool_name = params.get("name") or body.get("name")
+    arguments = params.get("arguments") or body.get("arguments", {})
 
+    # CRITICAL DISCOVERY FIX: Answer the dashboard's manual checking loop instantly
+    if method == "tools/list" or body.get("method") == "tools/list":
+        return {"tools": TOOL_MANIFEST}
+
+    # Execute actual tool modifications
     if tool_name == "save_memory":
         try:
             conn = get_memory_db()
@@ -125,15 +152,16 @@ async def handle_tool_call(request: Request):
             conn.commit()
             cur.close()
             conn.close()
-            return {"content": [{"type": "text", "text": f"SUCCESS: Found and saved a recipe for {dish} to your recipe database."}]}
+            return {"content": [{"type": "text", "text": f"SUCCESS: Saved a recipe for {dish}."}]}
         except Exception as e:
             return {"content": [{"type": "text", "text": f"Search Error: {e}"}]}
 
-    return {"error": "Unknown tool call method configuration structure."}
+    return {"error": "Unknown tool method configuration request layout."}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
