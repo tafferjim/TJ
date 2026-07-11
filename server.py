@@ -79,8 +79,9 @@ def retrieve_memory(key: str) -> str:
     except Exception as e:
         return f"Database Error while retrieving: {str(e)}"
 
-# Expose the ASGI application for Uvicorn
-app = mcp.asgi()
+# Create the ASGI application for Uvicorn using the modern FastMCP method
+app = mcp.streamable_http_app()
+
 
 
 
