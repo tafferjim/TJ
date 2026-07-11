@@ -192,8 +192,9 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
     except Exception as e:
         return f"Recipe Retrieve Error: {str(e)}"
 
-# CRITICAL FIX: Expose the ASGI gateway mapping layer natively for Uvicorn
-app = mcp.asgi()
+# Run the standalone server on Render's assigned system port
+if __name__ == "__main__":
+    mcp.run(transport="sse")
 
 
 
