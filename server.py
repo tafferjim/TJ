@@ -81,34 +81,36 @@ TOOL_MANIFEST = [
     }
 ]
 
+# ==========================================
+# REPLACE EVERYTHING FROM THIS POINT FORWARD:
+# ==========================================
+
 @app.get("/mcp/")
 @app.get("/mcp")
 async def mcp_root():
-    return {"status": "active", "transport": "sse", "endpoint": "/mcp/sse"}
+    return {"status": "active", "transport": "http"}
 
-@app.get("/mcp/sse")
-async def sse_endpoint(request: Request):
-    async def event_generator():
-        while True:
-            if await request.is_disconnected():
-                break
-            await asyncio.sleep(5)
-    return StreamingResponse(event_generator(), media_type="text/event-stream")
-
-@app.post("/mcp/sse")
 @app.post("/mcp")
 async def handle_tool_call(request: Request):
-    body = await request.json()
+    """Answers tool discovery loops and executes updates over standard HTTP POST."""
+    try:
+        body = await request.json()
+    except Exception:
+        return {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}}
+        
     method = body.get("method")
     params = body.get("params", {})
-    tool_name = params.get("name")
-    arguments = params.get("arguments", {})
     
-    # Standard MCP initialization/discovery requirement
-    if method == "initialize":
+    # Handle implicit/explicit tool name lookups
+    tool_name = params.get("name") or body.get("name")
+    arguments = params.get("arguments") or body.get("arguments", {})
+    request_id = body.get("id")
+
+    # Standard MCP initialization/discovery handshake
+    if method == "initialize" or method == "mcp.initialize":
         return {
             "jsonrpc": "2.0",
-            "id": body.get("id"),
+            "id": request_id,
             "result": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": {"tools": {}},
@@ -116,20 +118,19 @@ async def handle_tool_call(request: Request):
             }
         }
 
-    # Return full manifest when the AIPI Lite discovers tools
-    if method == "tools/list":
+    # Return full manifest when discovering available options
+    if method == "tools/list" or method == "mcp.tools/list":
         return {
             "jsonrpc": "2.0",
-            "id": body.get("id"),
+            "id": request_id,
             "result": {"tools": TOOL_MANIFEST}
         }
 
-       # Execute actual tool modifications
+    # Execute actual tool modifications
     if tool_name == "save_memory":
         conn = None
         try:
             conn = get_memory_db()
-            # 'with' handles transactions safely and automatically commits
             with conn:
                 with conn.cursor() as cur:
                     cur.execute("""
@@ -141,21 +142,21 @@ async def handle_tool_call(request: Request):
             
             return {
                 "jsonrpc": "2.0",
-                "id": body.get("id"),
+                "id": request_id,
                 "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved key '{arguments.get('key')}'."}]}
             }
         except Exception as e:
             return {
                 "jsonrpc": "2.0",
-                "id": body.get("id"),
+                "id": request_id,
                 "result": {"content": [{"type": "text", "text": f"Database Error: {e}"}]}
             }
         finally:
             if conn:
                 conn.close()
-
-            
+                
     elif tool_name == "search_web_for_recipe":
+        conn = None
         try:
             dish = arguments.get("dish_name")
             url = f"https://duckduckgo.com{dish}+recipe"
@@ -164,29 +165,31 @@ async def handle_tool_call(request: Request):
             links = [a.get("href") for a in soup.find_all("a", class_="result__url") if a.get("href")]
             
             conn = get_recipe_db()
-            cur = conn.cursor()
-            cur.execute("""
-                INSERT INTO recipe_store (recipe_name, ingredients, instructions) 
-                VALUES (%s, %s, %s) 
-                ON CONFLICT (recipe_name) 
-                DO UPDATE SET ingredients = EXCLUDED.ingredients;
-            """, (dish, f"Source links: {', '.join(links[:2])}", "Scraped automated data text placeholders."))
-            conn.commit()
-            cur.close()
-            conn.close()
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("""
+                        INSERT INTO recipe_store (recipe_name, ingredients, instructions) 
+                        VALUES (%s, %s, %s) 
+                        ON CONFLICT (recipe_name) 
+                        DO UPDATE SET ingredients = EXCLUDED.ingredients;
+                    """, (dish, f"Source links: {', '.join(links[:2])}", "Scraped automated data text placeholders."))
+            
             return {
                 "jsonrpc": "2.0",
-                "id": body.get("id"),
+                "id": request_id,
                 "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved a recipe for {dish}."}]}
             }
         except Exception as e:
             return {
                 "jsonrpc": "2.0",
-                "id": body.get("id"),
+                "id": request_id,
                 "result": {"content": [{"type": "text", "text": f"Search Error: {e}"}]}
             }
+        finally:
+            if conn:
+                conn.close()
 
-    return {"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}}
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}}
 
 if __name__ == "__main__":
     import uvicorn
