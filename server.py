@@ -21,7 +21,6 @@ def get_memory_db():
 
 @app.on_event("startup")
 def init_db():
-    """Builds database structures instantly upon container boot."""
     try:
         conn = get_memory_db()
         with conn:
@@ -53,14 +52,9 @@ TOOL_MANIFEST = [
     }
 ]
 
-# CAPTURE EVERY GET REQUEST ROUTE TRAFFIC TYPE ANYWHERE ON THE SERVER
-@app.get("/")
-@app.get("/mcp")
-@app.get("/mcp/")
-@app.get("/mcp/sse")
-@app.get("/mcp/sse/")
-async def universal_sse_endpoint(request: Request):
-    """Maintains active streaming network sessions for hardware handshake tracking loops."""
+# FORCED CATCH-ALL: Intercept any GET requests at the root or sub-paths
+@app.api_route("/{path:path}", methods=["GET"])
+async def universal_sse_endpoint(request: Request, path: str = ""):
     async def event_generator():
         init_payload = {
             "jsonrpc": "2.0",
@@ -75,14 +69,9 @@ async def universal_sse_endpoint(request: Request):
             await asyncio.sleep(5)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# CAPTURE EVERY POST ACTION TRAFFIC TYPE ANYWHERE ON THE SERVER
-@app.post("/")
-@app.post("/mcp")
-@app.post("/mcp/")
-@app.post("/mcp/sse")
-@app.post("/mcp/sse/")
-async def universal_handle_tool_call(request: Request):
-    """Processes any hardware write actions directly into your active table records rows."""
+# FORCED CATCH-ALL: Intercept any POST requests at the root or sub-paths
+@app.api_route("/{path:path}", methods=["POST"])
+async def universal_handle_tool_call(request: Request, path: str = ""):
     try:
         body = await request.json()
     except Exception:
@@ -139,4 +128,3 @@ async def universal_handle_tool_call(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
