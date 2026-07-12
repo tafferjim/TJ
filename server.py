@@ -18,13 +18,14 @@ app.add_middleware(
 
 def get_memory_db():
     url = os.environ.get("DATABASE_URL", "")
-    # Psycopg2 requires the 'postgres://' prefix instead of 'postgresql://'
+    # Robust fix for SQLAlchemy/Psycopg2 connection scheme requirements
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgres://", 1)
-    return psycopg2.connect(url)
+    return psycopg2.connect(url, sslmode="require")
 
 @app.on_event("startup")
 def init_db():
+    """Builds clean, empty tables instantly upon startup."""
     try:
         conn = get_memory_db()
         with conn:
@@ -56,8 +57,10 @@ TOOL_MANIFEST = [
     }
 ]
 
-@app.api_route("/{path:path}", methods=["GET"])
-async def universal_sse_endpoint(request: Request, path: str = ""):
+@app.get("/mcp")
+@app.get("/mcp/sse")
+async def sse_endpoint(request: Request):
+    """Establishes the clean protocol streaming handshake for the hardware connection layer."""
     async def event_generator():
         init_payload = {
             "jsonrpc": "2.0",
@@ -72,8 +75,10 @@ async def universal_sse_endpoint(request: Request, path: str = ""):
             await asyncio.sleep(5)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.api_route("/{path:path}", methods=["POST"])
-async def universal_handle_tool_call(request: Request, path: str = ""):
+@app.post("/mcp")
+@app.post("/mcp/sse")
+async def handle_tool_call(request: Request):
+    """Processes incoming data updates from the active hardware channel."""
     try:
         body = await request.json()
     except Exception:
@@ -83,6 +88,7 @@ async def universal_handle_tool_call(request: Request, path: str = ""):
     params = body.get("params", {})
     request_id = body.get("id")
 
+    # Immediate compliance responses for MCP initializations
     if method in ["initialize", "mcp.initialize"]:
         return {
             "jsonrpc": "2.0",
@@ -94,6 +100,14 @@ async def universal_handle_tool_call(request: Request, path: str = ""):
             }
         }
 
+    if method in ["tools/list", "mcp.tools/list"]:
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": {"tools": TOOL_MANIFEST}
+        }
+
+    # Extract names and variables
     tool_name = params.get("name") or body.get("name") or body.get("method")
     arguments = params.get("arguments") or body.get("arguments") or params
     
@@ -115,7 +129,7 @@ async def universal_handle_tool_call(request: Request, path: str = ""):
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {"content": [{"type": "text", "text": "SUCCESS"}]}
+            "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved {key_val}"}]}
         }
     except Exception as e:
         return {
@@ -126,7 +140,3 @@ async def universal_handle_tool_call(request: Request, path: str = ""):
     finally:
         if conn:
             conn.close()
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
