@@ -2,30 +2,21 @@ import os
 import psycopg2
 import json
 import asyncio
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
 def get_memory_db():
     url = os.environ.get("DATABASE_URL", "")
-    # Robust fix for SQLAlchemy/Psycopg2 connection scheme requirements
     if url.startswith("postgresql://"):
         url = url.replace("postgresql://", "postgres://", 1)
     return psycopg2.connect(url, sslmode="require")
 
-@app.on_event("startup")
-def init_db():
-    """Builds clean, empty tables instantly upon startup."""
+# MODERN LIFESPAN LIFECYCLE FIX: Replaces the broken @app.on_event startup system 
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Builds clean, empty tables instantly upon application server boot up."""
     try:
         conn = get_memory_db()
         with conn:
@@ -38,9 +29,21 @@ def init_db():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
-        print("Database successfully synchronized.")
+        print("Database successfully synchronized over lifespan handler context layer.")
     except Exception as e:
-        print(f"Database setup error: {e}")
+        print(f"Database setup error during lifespan startup: {e}")
+    
+    yield  # Application runs while sitting at this yield line
+
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 TOOL_MANIFEST = [
     {
@@ -57,10 +60,8 @@ TOOL_MANIFEST = [
     }
 ]
 
-@app.get("/mcp")
-@app.get("/mcp/sse")
-async def sse_endpoint(request: Request):
-    """Establishes the clean protocol streaming handshake for the hardware connection layer."""
+@app.api_route("/{path:path}", methods=["GET"])
+async def universal_sse_endpoint(request: Request, path: str = ""):
     async def event_generator():
         init_payload = {
             "jsonrpc": "2.0",
@@ -75,10 +76,8 @@ async def sse_endpoint(request: Request):
             await asyncio.sleep(5)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-@app.post("/mcp")
-@app.post("/mcp/sse")
-async def handle_tool_call(request: Request):
-    """Processes incoming data updates from the active hardware channel."""
+@app.api_route("/{path:path}", methods=["POST"])
+async def universal_handle_tool_call(request: Request, path: str = ""):
     try:
         body = await request.json()
     except Exception:
@@ -88,7 +87,6 @@ async def handle_tool_call(request: Request):
     params = body.get("params", {})
     request_id = body.get("id")
 
-    # Immediate compliance responses for MCP initializations
     if method in ["initialize", "mcp.initialize"]:
         return {
             "jsonrpc": "2.0",
@@ -107,7 +105,6 @@ async def handle_tool_call(request: Request):
             "result": {"tools": TOOL_MANIFEST}
         }
 
-    # Extract names and variables
     tool_name = params.get("name") or body.get("name") or body.get("method")
     arguments = params.get("arguments") or body.get("arguments") or params
     
@@ -140,3 +137,7 @@ async def handle_tool_call(request: Request):
     finally:
         if conn:
             conn.close()
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
