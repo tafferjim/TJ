@@ -84,12 +84,30 @@ TOOL_MANIFEST = [
 @app.get("/mcp/")
 @app.get("/mcp")
 async def mcp_root():
-    return {"status": "active", "transport": "http"}
+    return {"status": "active", "transport": "sse", "endpoint": "/mcp/sse"}
 
-@app.post("/mcp/")
+@app.get("/mcp/sse")
+async def sse_endpoint(request: Request):
+    """Establishes a persistent streaming handshake required by the AIPI Lite dashboard."""
+    async def event_generator():
+        # Immediate clean connection notification frame
+        init_payload = {
+            "jsonrpc": "2.0",
+            "method": "tools/list",
+            "result": {"tools": TOOL_MANIFEST}
+        }
+        yield f"data: {json.dumps(init_payload)}\n\n"
+        
+        while True:
+            if await request.is_disconnected():
+                break
+            await asyncio.sleep(5)
+    return StreamingResponse(event_generator(), media_type="text/event-stream")
+
+@app.post("/mcp/sse")
 @app.post("/mcp")
 async def handle_tool_call(request: Request):
-    """Answers tool discovery loops and executes updates over standard HTTP POST."""
+    """Processes incoming data writes over the open SSE layer connection framework."""
     try:
         body = await request.json()
     except Exception:
@@ -192,6 +210,7 @@ async def handle_tool_call(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
 
 
 
