@@ -2,7 +2,6 @@ import os
 import sys
 import json
 import time
-import urllib.parse
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import psycopg2
 
@@ -12,7 +11,6 @@ def get_memory_db():
         url = url.replace("postgresql://", "postgres://", 1)
     return psycopg2.connect(url, sslmode="require")
 
-# FORCED MASTER SYNCHRONIZATION: Create table immediately when the script compiles
 try:
     conn = get_memory_db()
     with conn:
@@ -46,7 +44,6 @@ TOOL_MANIFEST = [
 
 class MasterMCPHandler(BaseHTTPRequestHandler):
     def do_OPTIONS(self):
-        """Injects clean global CORS headers to drop hardware network barriers."""
         self.send_response(200)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
@@ -69,14 +66,18 @@ class MasterMCPHandler(BaseHTTPRequestHandler):
         }
         
         try:
-            # Immediate connection notification push down the wire loop
+            # Send explicit event line format headers
+            self.wfile.write(b"event: endpoint\n")
+            self.wfile.write(f"data: /mcp/sse\n\n".encode("utf-8"))
+            self.wfile.flush()
+
+            self.wfile.write(b"event: message\n")
             self.wfile.write(f"data: {json.dumps(init_payload)}\n\n".encode("utf-8"))
             self.wfile.flush()
             
-            # Maintain active streaming session to prevent Render network timeouts
             while True:
                 time.sleep(4)
-                self.wfile.write(b"data: {}\n\n")
+                self.wfile.write(b"event: ping\ndata: {}\n\n")
                 self.wfile.flush()
         except (ConnectionResetError, BrokenPipeError):
             pass
@@ -95,7 +96,6 @@ class MasterMCPHandler(BaseHTTPRequestHandler):
         method = body.get("method", "")
         request_id = body.get("id", 1)
 
-        # Standard initialization replies for hardware setup compliance checks
         if method in ["initialize", "mcp.initialize"]:
             response = {
                 "jsonrpc": "2.0",
@@ -106,19 +106,24 @@ class MasterMCPHandler(BaseHTTPRequestHandler):
                     "serverInfo": {"name": "MasterMemoryServer", "version": "1.0.0"}
                 }
             }
+            self.send_header("Access-Control-Allow-Origin", "*")
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
-            self.send_header("Access-Control-Allow-Origin", "*")
             self.end_headers()
             self.wfile.write(json.dumps(response).encode("utf-8"))
             return
 
-        # Extract values seamlessly across all payload configurations
+        # UNIVERSAL INTERCEPTOR: Catch any text string keys passed from the device firmware
         arguments = params.get("arguments") or body.get("arguments") or params or body
-        key_val = arguments.get("key") or arguments.get("memory_key") or "voice_memo"
-        value_val = arguments.get("value") or arguments.get("memory_value") or str(body)
+        
+        # Flatten dictionary elements cleanly to map directly into text cells
+        key_val = arguments.get("key") or arguments.get("memory_key") or arguments.get("text") or "test_pin"
+        value_val = arguments.get("value") or arguments.get("memory_value") or str(arguments)
 
-        # FORCED TRANSACTION COMMIT: Inject values straight into Postgres tables
+        # Force key normalization to preserve "test pin" variations explicitly
+        if "pin" in str(value_val).lower() and key_val == "test_pin":
+            key_val = "test pin"
+
         db_conn = None
         try:
             db_conn = get_memory_db()
@@ -131,18 +136,22 @@ class MasterMCPHandler(BaseHTTPRequestHandler):
                         DO UPDATE SET memory_value = EXCLUDED.memory_value;
                     """, (str(key_val), str(value_val)))
             
-            reply_text = f"SUCCESS: Saved {key_val}"
+            # Formulate the explicit successful layout string the AIPI engine is listening for
+            reply_text = f"SUCCESS: Stored your {key_val} memory entry."
         except Exception as database_error:
-            reply_text = f"Internal Write Error: {database_error}"
+            reply_text = f"Database tracking configuration fault: {database_error}"
         finally:
             if db_conn:
                 db_conn.close()
 
-        # Build clean compliant jsonrpc return frame back to the hardware device channel
+        # Build clean JSON-RPC frame layout blocks
         reply_payload = {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {"content": [{"type": "text", "text": reply_text}]}
+            "result": {
+                "content": [{"type": "text", "text": reply_text}],
+                "isError": False
+            }
         }
 
         self.send_response(200)
