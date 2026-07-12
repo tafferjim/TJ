@@ -17,7 +17,11 @@ app.add_middleware(
 )
 
 def get_memory_db():
-    return psycopg2.connect(os.environ.get("DATABASE_URL"))
+    url = os.environ.get("DATABASE_URL", "")
+    # Psycopg2 requires the 'postgres://' prefix instead of 'postgresql://'
+    if url.startswith("postgresql://"):
+        url = url.replace("postgresql://", "postgres://", 1)
+    return psycopg2.connect(url)
 
 @app.on_event("startup")
 def init_db():
@@ -52,7 +56,6 @@ TOOL_MANIFEST = [
     }
 ]
 
-# FORCED CATCH-ALL: Intercept any GET requests at the root or sub-paths
 @app.api_route("/{path:path}", methods=["GET"])
 async def universal_sse_endpoint(request: Request, path: str = ""):
     async def event_generator():
@@ -69,7 +72,6 @@ async def universal_sse_endpoint(request: Request, path: str = ""):
             await asyncio.sleep(5)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# FORCED CATCH-ALL: Intercept any POST requests at the root or sub-paths
 @app.api_route("/{path:path}", methods=["POST"])
 async def universal_handle_tool_call(request: Request, path: str = ""):
     try:
