@@ -4,15 +4,24 @@ import json
 import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_memory_db():
     return psycopg2.connect(os.environ.get("DATABASE_URL"))
 
 @app.on_event("startup")
 def init_db():
-    """Initializes tables cleanly upon container boot."""
+    """Builds database structures instantly upon container boot."""
     try:
         conn = get_memory_db()
         with conn:
@@ -25,9 +34,9 @@ def init_db():
                         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                     );
                 """)
-        print("Database structure successfully configured.")
+        print("Database successfully synchronized.")
     except Exception as e:
-        print(f"Database connection warning: {e}")
+        print(f"Database setup error: {e}")
 
 TOOL_MANIFEST = [
     {
@@ -44,12 +53,14 @@ TOOL_MANIFEST = [
     }
 ]
 
-# CORE FIX: This processes the exact "GET /" connection layer your hardware logs are calling
+# CAPTURE EVERY GET REQUEST ROUTE TRAFFIC TYPE ANYWHERE ON THE SERVER
 @app.get("/")
 @app.get("/mcp")
+@app.get("/mcp/")
 @app.get("/mcp/sse")
-async def sse_handshake(request: Request):
-    """Establishes the clean streaming handshake on the exact base url."""
+@app.get("/mcp/sse/")
+async def universal_sse_endpoint(request: Request):
+    """Maintains active streaming network sessions for hardware handshake tracking loops."""
     async def event_generator():
         init_payload = {
             "jsonrpc": "2.0",
@@ -64,12 +75,14 @@ async def sse_handshake(request: Request):
             await asyncio.sleep(5)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# CORE FIX: This intercepts the "POST /" action writes coming from your hardware device
+# CAPTURE EVERY POST ACTION TRAFFIC TYPE ANYWHERE ON THE SERVER
 @app.post("/")
 @app.post("/mcp")
+@app.post("/mcp/")
 @app.post("/mcp/sse")
-async def handle_voice_data(request: Request):
-    """Parses standard MCP tool schemas and logs rows directly to Postgres."""
+@app.post("/mcp/sse/")
+async def universal_handle_tool_call(request: Request):
+    """Processes any hardware write actions directly into your active table records rows."""
     try:
         body = await request.json()
     except Exception:
@@ -78,8 +91,7 @@ async def handle_voice_data(request: Request):
     method = body.get("method")
     params = body.get("params", {})
     request_id = body.get("id")
-    
-    # Track initialization steps
+
     if method in ["initialize", "mcp.initialize"]:
         return {
             "jsonrpc": "2.0",
@@ -91,7 +103,6 @@ async def handle_voice_data(request: Request):
             }
         }
 
-    # Match active tool write variables
     tool_name = params.get("name") or body.get("name") or body.get("method")
     arguments = params.get("arguments") or body.get("arguments") or params
     
@@ -113,7 +124,7 @@ async def handle_voice_data(request: Request):
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved key '{key_val}'."}]}
+            "result": {"content": [{"type": "text", "text": "SUCCESS"}]}
         }
     except Exception as e:
         return {
@@ -128,3 +139,4 @@ async def handle_voice_data(request: Request):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
+
