@@ -5,9 +5,19 @@ import json
 import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
 from bs4 import BeautifulSoup
 
 app = FastAPI()
+
+# Enable CORS to ensure the device or dashboard doesn't get blocked by security headers
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 def get_memory_db():
     return psycopg2.connect(os.environ.get("DATABASE_URL"))
@@ -36,25 +46,6 @@ def init_db():
     except Exception as e:
         print(f"Memory init error: {e}")
 
-    try:
-        conn = get_recipe_db()
-        cur = conn.cursor()
-        cur.execute("""
-            CREATE TABLE IF NOT EXISTS recipe_store (
-                id SERIAL PRIMARY KEY,
-                recipe_name TEXT UNIQUE NOT NULL,
-                ingredients TEXT NOT NULL,
-                instructions TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            );
-        """)
-        conn.commit()
-        cur.close()
-        conn.close()
-        print("Recipe table ready.")
-    except Exception as e:
-        print(f"Recipe init error: {e}")
-
 TOOL_MANIFEST = [
     {
         "name": "save_memory",
@@ -67,30 +58,20 @@ TOOL_MANIFEST = [
             },
             "required": ["key", "value"]
         }
-    },
-    {
-        "name": "search_web_for_recipe",
-        "description": "Searches for and saves cooking recipes.",
-        "inputSchema": {
-            "type": "object",
-            "properties": {
-                "dish_name": {"type": "string"}
-            },
-            "required": ["dish_name"]
-        }
     }
 ]
 
-@app.get("/mcp/")
 @app.get("/mcp")
+@app.get("/mcp/")
 async def mcp_root():
     return {"status": "active", "transport": "sse", "endpoint": "/mcp/sse"}
 
 @app.get("/mcp/sse")
+@app.get("/mcp/sse/")
 async def sse_endpoint(request: Request):
-    """Establishes a persistent streaming handshake required by the AIPI Lite dashboard."""
+    """Establishes the persistent SSE handshake stream that the AIPI Lite dashboard requires."""
     async def event_generator():
-        # Immediate clean connection notification frame
+        # Clean standard header frame immediately sent down the wire
         init_payload = {
             "jsonrpc": "2.0",
             "method": "tools/list",
@@ -101,13 +82,17 @@ async def sse_endpoint(request: Request):
         while True:
             if await request.is_disconnected():
                 break
+            # Keep-alive ping to ensure Render doesn't drop the connection
+            yield "data: {}\n\n"
             await asyncio.sleep(5)
+            
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
 @app.post("/mcp/sse")
+@app.post("/mcp/sse/")
 @app.post("/mcp")
 async def handle_tool_call(request: Request):
-    """Processes incoming data writes over the open SSE layer connection framework."""
+    """Processes incoming data updates from the active hardware channel."""
     try:
         body = await request.json()
     except Exception:
@@ -116,6 +101,7 @@ async def handle_tool_call(request: Request):
     method = body.get("method")
     params = body.get("params", {})
     
+    # Extract details based on standard JSON-RPC structures
     if method in ["tools/call", "mcp.tools/call"]:
         tool_name = params.get("name")
         arguments = params.get("arguments", {})
@@ -170,70 +156,9 @@ async def handle_tool_call(request: Request):
         finally:
             if conn:
                 conn.close()
-                
-    elif tool_name == "search_web_for_recipe":
-        conn = None
-        try:
-            dish = arguments.get("dish_name")
-            url = f"https://duckduckgo.com{dish}+recipe"
-            res = requests.get(url, headers={"User-Agent": "Mozilla/5.0"}, timeout=10)
-            soup = BeautifulSoup(res.text, "html.parser")
-            links = [a.get("href") for a in soup.find_all("a", class_="result__url") if a.get("href")]
-            
-            conn = get_recipe_db()
-            with conn:
-                with conn.cursor() as cur:
-                    cur.execute("""
-                        INSERT INTO recipe_store (recipe_name, ingredients, instructions) 
-                        VALUES (%s, %s, %s) 
-                        ON CONFLICT (recipe_name) 
-                        DO UPDATE SET ingredients = EXCLUDED.ingredients;
-                    """, (dish, f"Source links: {', '.join(links[:2])}", "Scraped automated data text placeholders."))
-            
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved a recipe for {dish}."}]}
-            }
-        except Exception as e:
-            return {
-                "jsonrpc": "2.0",
-                "id": request_id,
-                "result": {"content": [{"type": "text", "text": f"Search Error: {e}"}]}
-            }
-        finally:
-            if conn:
-                conn.close()
 
     return {"jsonrpc": "2.0", "id": request_id, "error": {"code": -32601, "message": "Method not found"}}
 
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 10000)))
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
