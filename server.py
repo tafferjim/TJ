@@ -4,23 +4,15 @@ import json
 import asyncio
 from fastapi import FastAPI, Request
 from fastapi.responses import StreamingResponse
-from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 def get_memory_db():
     return psycopg2.connect(os.environ.get("DATABASE_URL"))
 
 @app.on_event("startup")
 def init_db():
+    """Initializes tables cleanly upon container boot."""
     try:
         conn = get_memory_db()
         with conn:
@@ -52,10 +44,12 @@ TOOL_MANIFEST = [
     }
 ]
 
-# FORCED CATCH-ALL: Handle any GET requests anywhere on the server
-@app.get("/{path:path}")
-async def universal_sse_endpoint(request: Request, path: str = ""):
-    """Instantly establishes the required streaming loop no matter what path the hardware hits."""
+# CORE FIX: This processes the exact "GET /" connection layer your hardware logs are calling
+@app.get("/")
+@app.get("/mcp")
+@app.get("/mcp/sse")
+async def sse_handshake(request: Request):
+    """Establishes the clean streaming handshake on the exact base url."""
     async def event_generator():
         init_payload = {
             "jsonrpc": "2.0",
@@ -70,25 +64,22 @@ async def universal_sse_endpoint(request: Request, path: str = ""):
             await asyncio.sleep(5)
     return StreamingResponse(event_generator(), media_type="text/event-stream")
 
-# FORCED CATCH-ALL: Handle any POST tool execution requests anywhere on the server
-@app.post("/{path:path}")
-async def universal_handle_tool_call(request: Request, path: str = ""):
-    """Interceptors all tool actions and writes directly into your Postgres columns."""
+# CORE FIX: This intercepts the "POST /" action writes coming from your hardware device
+@app.post("/")
+@app.post("/mcp")
+@app.post("/mcp/sse")
+async def handle_voice_data(request: Request):
+    """Parses standard MCP tool schemas and logs rows directly to Postgres."""
     try:
         body = await request.json()
     except Exception:
-        body = {}
+        return {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}}
         
     method = body.get("method")
     params = body.get("params", {})
-    
-    tool_name = params.get("name") or body.get("name") or body.get("method")
-    arguments = params.get("arguments") or body.get("arguments") or params
-    
-    key_val = arguments.get("key") or arguments.get("memory_key") or "voice_memo"
-    value_val = arguments.get("value") or arguments.get("memory_value") or str(body)
     request_id = body.get("id")
-
+    
+    # Track initialization steps
     if method in ["initialize", "mcp.initialize"]:
         return {
             "jsonrpc": "2.0",
@@ -100,7 +91,13 @@ async def universal_handle_tool_call(request: Request, path: str = ""):
             }
         }
 
-    # Intercept any voice interaction process and save it
+    # Match active tool write variables
+    tool_name = params.get("name") or body.get("name") or body.get("method")
+    arguments = params.get("arguments") or body.get("arguments") or params
+    
+    key_val = arguments.get("key") or arguments.get("memory_key") or "voice_memo"
+    value_val = arguments.get("value") or arguments.get("memory_value") or str(body)
+
     conn = None
     try:
         conn = get_memory_db()
@@ -116,7 +113,7 @@ async def universal_handle_tool_call(request: Request, path: str = ""):
         return {
             "jsonrpc": "2.0",
             "id": request_id,
-            "result": {"content": [{"type": "text", "text": "SUCCESS: Fact committed."}]}
+            "result": {"content": [{"type": "text", "text": f"SUCCESS: Saved key '{key_val}'."}]}
         }
     except Exception as e:
         return {
