@@ -5,8 +5,10 @@ from fastmcp import FastMCP
 mcp = FastMCP("AIPI-Memories-Extension")
 DB_URL = os.environ.get("DATABASE_URL")
 
+
 def initialize_database():
     """Automatically creates the memories table if it does not exist yet."""
+    print(f"DB_URL is set: {bool(DB_URL)}", flush=True)
     if not DB_URL:
         print("DATABASE_URL not found. Skipping initialization.", flush=True)
         return
@@ -27,28 +29,35 @@ def initialize_database():
     except Exception as e:
         print(f"Database initialization failed: {str(e)}", flush=True)
 
+
 @mcp.tool()
 def save_memory(content: str) -> str:
-    print(f"save_memory called with: {content}", flush=True)
+    """Saves a new long-term memory or fact about the user to the external database."""
+    print(f"save_memory CALLED with content: {content!r}", flush=True)
     if not DB_URL:
+        print("save_memory: DATABASE_URL not set", flush=True)
         return "Error: DATABASE_URL environment variable is not set."
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        cursor.execute("INSERT INTO memories (memory_text) VALUES (%s);", (content,))
+        query = "INSERT INTO memories (memory_text) VALUES (%s);"
+        cursor.execute(query, (content,))
         conn.commit()
         cursor.close()
         conn.close()
-        print("save_memory: insert committed", flush=True)
+        print("save_memory: insert committed successfully", flush=True)
         return f"Successfully saved to your Render database: '{content}'"
     except Exception as e:
-        print(f"save_memory FAILED: {e}", flush=True)
+        print(f"save_memory FAILED: {str(e)}", flush=True)
         return f"Failed to save memory. Error: {str(e)}"
+
 
 @mcp.tool()
 def get_memories() -> str:
     """Retrieves all memories as a simple text list."""
+    print("get_memories CALLED", flush=True)
     if not DB_URL:
+        print("get_memories: DATABASE_URL not set", flush=True)
         return "Error: DATABASE_URL environment variable is not set."
     try:
         conn = psycopg2.connect(DB_URL)
@@ -57,6 +66,7 @@ def get_memories() -> str:
         rows = cursor.fetchall()
         cursor.close()
         conn.close()
+        print(f"get_memories: retrieved {len(rows)} rows", flush=True)
         if not rows:
             return "The memories table exists, but it is currently empty! Try saving a memory first."
         memory_list = []
@@ -64,12 +74,16 @@ def get_memories() -> str:
             memory_list.append(f"- {str(row[0])}")
         return "Here are the saved memories extracted directly from the database:\n\n" + "\n".join(memory_list)
     except Exception as e:
+        print(f"get_memories FAILED: {str(e)}", flush=True)
         return f"Failed to retrieve memories. Error: {str(e)}"
+
 
 @mcp.tool()
 def delete_last_memory() -> str:
     """Deletes the single most recently saved memory from the database. No ID required."""
+    print("delete_last_memory CALLED", flush=True)
     if not DB_URL:
+        print("delete_last_memory: DATABASE_URL not set", flush=True)
         return "Error: DATABASE_URL environment variable is not set."
     try:
         conn = psycopg2.connect(DB_URL)
@@ -80,6 +94,7 @@ def delete_last_memory() -> str:
         if not row:
             cursor.close()
             conn.close()
+            print("delete_last_memory: no rows to delete", flush=True)
             return "There are no memories in the database to delete."
         mem_id = row[0]
         mem_text = row[1]
@@ -88,11 +103,15 @@ def delete_last_memory() -> str:
         conn.commit()
         cursor.close()
         conn.close()
+        print(f"delete_last_memory: deleted id={mem_id}", flush=True)
         return f"Successfully erased the most recent memory: '{mem_text}'"
     except Exception as e:
+        print(f"delete_last_memory FAILED: {str(e)}", flush=True)
         return f"Failed to delete the last memory. Error: {str(e)}"
+
 
 if __name__ == "__main__":
     initialize_database()
     port = int(os.environ.get("PORT", 8000))
+    print(f"Starting server on port {port}", flush=True)
     mcp.run(transport="sse", host="0.0.0.0", port=port)
