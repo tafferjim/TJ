@@ -1,4 +1,5 @@
 import os
+import json
 from mcp.server.models import InitializationOptions
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
@@ -10,7 +11,7 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
-# 1. Database Setup
+# 1. Database Initialization
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dbname")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -28,7 +29,7 @@ class MemoryLog(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# 2. Create the official MCP Server
+# 2. Establish Clean MCP Server Instantiation
 server = Server("aipi-memory-backend")
 
 @server.list_tools()
@@ -36,11 +37,11 @@ async def handle_list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="store_fact",
-            description="Run this tool immediately when the user commands you to store a fact externally.",
+            description="Executes immediately to record memories, real-world data logs, and facts directly into the external database storage.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "fact_to_save": {"type": "string", "description": "The text or memory entry to save."}
+                    "fact_to_save": {"type": "string", "description": "The exact factual text string context to register permanently."}
                 },
                 "required": ["fact_to_save"],
             },
@@ -52,37 +53,36 @@ async def handle_call_tool(name: str, arguments: dict | None) -> types.CallToolR
     if name == "store_fact":
         if not arguments or "fact_to_save" not in arguments:
             return types.CallToolResult(
-                content=[types.TextContent(type="text", text="Error: Missing data")],
+                content=[types.TextContent(type="text", text="Error: Arguments empty.")],
                 isError=True
             )
         
         db = SessionLocal()
         try:
-            fact_text = str(arguments.get("fact_to_save"))
-            new_log = MemoryLog(memory_data=fact_text)
+            fact_payload = str(arguments.get("fact_to_save"))
+            new_log = MemoryLog(memory_data=fact_payload)
             db.add(new_log)
             db.commit()
             
-            # This returns the official CallToolResult layout the AIPI platform requires
             return types.CallToolResult(
-                content=[types.TextContent(type="text", text=f"Saved to external database (ID: {new_log.id})")],
+                content=[types.TextContent(type="text", text=f"Success: Stored into database table row (ID: {new_log.id})")],
                 isError=False
             )
         except Exception as e:
             db.rollback()
             return types.CallToolResult(
-                content=[types.TextContent(type="text", text=f"Database error: {str(e)}")],
+                content=[types.TextContent(type="text", text=f"Database write crash: {str(e)}")],
                 isError=True
             )
         finally:
             db.close()
-            
+
     return types.CallToolResult(
-        content=[types.TextContent(type="text", text="Error: Unknown tool")],
+        content=[types.TextContent(type="text", text="Error: Selected tool doesn't exist.")],
         isError=True
     )
 
-# 3. SSE Protocol Transportation
+# 3. Handle Clean SSE Protocol Connection Mappings
 sse = SseServerTransport("/sse")
 
 async def handle_sse(request):
