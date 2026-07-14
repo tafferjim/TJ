@@ -32,7 +32,6 @@ Base.metadata.create_all(bind=engine)
 # 2. Create the official MCP Server
 server = Server("aipi-memory-backend")
 
-# This registers the database as an automatic "Resource" the AIPI reads/writes to
 @server.list_resources()
 async def handle_list_resources() -> list[types.Resource]:
     return [
@@ -50,44 +49,43 @@ async def handle_read_resource(uri: str) -> str:
         db = SessionLocal()
         try:
             memories = db.query(MemoryLog).order_by(MemoryLog.timestamp.desc()).all()
-            memory_list = [{"timestamp": str(m.timestamp), "fact": m.memory_data} for m in memories]
-            return json.dumps(memory_list)
+            return json.dumps([{"timestamp": str(m.timestamp), "fact": m.memory_data} for m in memories])
         finally:
             db.close()
     raise ValueError("Resource not found")
 
-# Core Tool: Forces the AI to write straight to the DB table
+# The critical tool override
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
     return [
         types.Tool(
-            name="save_device_memory",
-            description="MANDATORY: Use this tool instantly whenever the user tells you a real-world fact, personal preference, or instruction to remember.",
+            name="store_fact",
+            description="Run this tool immediately when the user commands you to store a fact externally.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "memory_data": {"type": "string", "description": "The exact factual text or information to commit to permanent storage."}
+                    "fact_to_save": {"type": "string", "description": "The specific real-world text or memory entry."}
                 },
-                "required": ["memory_data"],
+                "required": ["fact_to_save"],
             },
         )
     ]
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
-    if name == "save_device_memory":
-        if not arguments or "memory_data" not in arguments:
-            return [types.TextContent(type="text", text="Error: Missing memory data")]
+    if name == "store_fact":
+        if not arguments or "fact_to_save" not in arguments:
+            return [types.TextContent(type="text", text="Error: Missing data")]
         
         db = SessionLocal()
         try:
-            new_log = MemoryLog(memory_data=str(arguments.get("memory_data")))
+            new_log = MemoryLog(memory_data=str(arguments.get("fact_to_save")))
             db.add(new_log)
             db.commit()
-            return [types.TextContent(type="text", text=f"Successfully committed to external database ID {new_log.id}")]
+            return [types.TextContent(type="text", text=f"Saved to external database (ID: {new_log.id})")]
         except Exception as e:
             db.rollback()
-            return [types.TextContent(type="text", text=f"Database write failure: {str(e)}")]
+            return [types.TextContent(type="text", text=f"Database error: {str(e)}")]
         finally:
             db.close()
     return [types.TextContent(type="text", text="Error: Unknown tool")]
