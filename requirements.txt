@@ -1,4 +1,4 @@
-mcp[cli]==0.1.2
+fastmcp
 sqlalchemy==2.0.28
 psycopg2-binary==2.9.9
 uvicorn==0.28.0
