@@ -29,19 +29,20 @@ def initialize_database():
 
 @mcp.tool()
 def save_memory(content: str) -> str:
-    """Saves a new long-term memory or fact about the user to the external database."""
+    print(f"save_memory called with: {content}", flush=True)
     if not DB_URL:
         return "Error: DATABASE_URL environment variable is not set."
     try:
         conn = psycopg2.connect(DB_URL)
         cursor = conn.cursor()
-        query = "INSERT INTO memories (memory_text) VALUES (%s);"
-        cursor.execute(query, (content,))
+        cursor.execute("INSERT INTO memories (memory_text) VALUES (%s);", (content,))
         conn.commit()
         cursor.close()
         conn.close()
+        print("save_memory: insert committed", flush=True)
         return f"Successfully saved to your Render database: '{content}'"
     except Exception as e:
+        print(f"save_memory FAILED: {e}", flush=True)
         return f"Failed to save memory. Error: {str(e)}"
 
 @mcp.tool()
