@@ -1,106 +1,113 @@
 import os
-import json
-from mcp.server.models import InitializationOptions
-import mcp.types as types
-from mcp.server import NotificationOptions, Server
-from mcp.server.sse import SseServerTransport
-from starlette.applications import Starlette
-from starlette.routing import Route
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-from datetime import datetime
+import psycopg2
+from fastmcp import FastMCP
 
-# 1. Database Initialization
-DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dbname")
-if DATABASE_URL.startswith("postgres://"):
-    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+mcp = FastMCP("AIPI-Memories-Extension")
 
-engine = create_engine(DATABASE_URL)
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-Base = declarative_base()
+DB_URL = os.environ.get("DATABASE_URL")
 
-class MemoryLog(Base):
-    __tablename__ = "memory_logs"
-    id = Column(Integer, primary_key=True, index=True)
-    device_id = Column(String(50), index=True, default="aipi_lite")
-    memory_data = Column(Text, nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+def initialize_database():
+    """Automatically creates the memories table if it does not exist yet."""
+    if not DB_URL:
+        print("DATABASE_URL not found. Skipping initialization.", flush=True)
+        return
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS memories (
+                id SERIAL PRIMARY KEY,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                memory_text TEXT NOT NULL
+            );
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("Database initialized successfully.", flush=True)
+    except Exception as e:
+        print(f"Database initialization failed: {str(e)}", flush=True)
+@mcp.tool()
+def save_memory(content: str) -> str:
+    """Saves a new long-term memory or fact about the user to the external database."""
+    if not DB_URL:
+        return "Error: DATABASE_URL environment variable is not set."
 
-Base.metadata.create_all(bind=engine)
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
 
-# 2. Establish Clean MCP Server Instantiation
-server = Server("aipi-memory-backend")
+        query = "INSERT INTO memories (memory_text) VALUES (%s);"
+        cursor.execute(query, (content,))
 
-@server.list_tools()
-async def handle_list_tools() -> list[types.Tool]:
-    return [
-        types.Tool(
-            name="store_fact",
-            description="Executes immediately to record memories, real-world data logs, and facts directly into the external database storage.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "fact_to_save": {"type": "string", "description": "The exact factual text string context to register permanently."}
-                },
-                "required": ["fact_to_save"],
-            },
-        )
-    ]
+        conn.commit()
+        cursor.close()
+        conn.close()
 
-@server.call_tool()
-async def handle_call_tool(name: str, arguments: dict | None) -> types.CallToolResult:
-    if name == "store_fact":
-        if not arguments or "fact_to_save" not in arguments:
-            return types.CallToolResult(
-                content=[types.TextContent(type="text", text="Error: Arguments empty.")],
-                isError=True
-            )
-        
-        db = SessionLocal()
-        try:
-            fact_payload = str(arguments.get("fact_to_save"))
-            new_log = MemoryLog(memory_data=fact_payload)
-            db.add(new_log)
-            db.commit()
-            
-            return types.CallToolResult(
-                content=[types.TextContent(type="text", text=f"Success: Stored into database table row (ID: {new_log.id})")],
-                isError=False
-            )
-        except Exception as e:
-            db.rollback()
-            return types.CallToolResult(
-                content=[types.TextContent(type="text", text=f"Database write crash: {str(e)}")],
-                isError=True
-            )
-        finally:
-            db.close()
+        return f"Successfully saved to your Render database: '{content}'"
+    except Exception as e:
+        return f"Failed to save memory. Error: {str(e)}"
 
-    return types.CallToolResult(
-        content=[types.TextContent(type="text", text="Error: Selected tool doesn't exist.")],
-        isError=True
-    )
+@mcp.tool()
+def get_memories() -> str:
+    """Retrieves all memories as a simple text list."""
+    if not DB_URL:
+        return "Error: DATABASE_URL environment variable is not set."
 
-# 3. Handle Clean SSE Protocol Connection Mappings
-sse = SseServerTransport("/sse")
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
 
-async def handle_sse(request):
-    async with sse.connect_endpoints(request.scope, request.receive, request.send) as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            InitializationOptions(
-                server_name="aipi-memory-backend",
-                server_version="1.0.0",
-                capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(),
-                    experimental_capabilities={},
-                ),
-            ),
-        )
+        cursor.execute("SELECT memory_text FROM memories ORDER BY id ASC;")
+        rows = cursor.fetchall()
 
-app = Starlette(routes=[
-    Route("/sse", endpoint=handle_sse),
-    Route("/messages", endpoint=sse.handle_post_message, methods=["POST"]),
-])
+        cursor.close()
+        conn.close()
+
+        if not rows:
+            return "The memories table exists, but it is currently empty! Try saving a memory first."
+
+        memory_list = []
+        for row in rows:
+            memory_list.append(f"- {str(row[0])}")
+
+        return "Here are the saved memories extracted directly from the database:\n\n" + "\n".join(memory_list)
+    except Exception as e:
+        return f"Failed to retrieve memories. Error: {str(e)}"
+@mcp.tool()
+def delete_last_memory() -> str:
+    """Deletes the single most recently saved memory from the database. No ID required."""
+    if not DB_URL:
+        return "Error: DATABASE_URL environment variable is not set."
+
+    try:
+        conn = psycopg2.connect(DB_URL)
+        cursor = conn.cursor()
+
+Find the newest entry
+        cursor.execute("SELECT id, memory_text FROM memories ORDER BY id DESC LIMIT 1;")
+        row = cursor.fetchone()
+
+        if not row:
+            cursor.close()
+            conn.close()
+            return "There are no memories in the database to delete."
+
+        mem_id = row[0]
+        mem_text = row[1]
+
+Wipe it out
+        cursor.execute("DELETE FROM memories WHERE id = %s;", (mem_id,))
+        conn.commit()
+
+        cursor.close()
+        conn.close()
+        return f"Successfully erased the most recent memory: '{mem_text}'"
+    except Exception as e:
+        return f"Failed to delete the last memory. Error: {str(e)}"
+
+if name == "main":
+    initialize_database()
+
+    port = int(os.environ.get("PORT", 8000))
+    mcp.run(transport="sse", host="0.0.0.0", port=port)
