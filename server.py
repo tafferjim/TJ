@@ -1,5 +1,4 @@
 import os
-import json
 from mcp.server.models import InitializationOptions
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
@@ -29,68 +28,47 @@ class MemoryLog(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# 2. Create the official MCP Server
+# 2. Simple MCP Server Layout
 server = Server("aipi-memory-backend")
 
-@server.list_resources()
-async def handle_list_resources() -> list[types.Resource]:
-    return [
-        types.Resource(
-            uri="aipi://memory/storage",
-            name="AIPI External Memory Database",
-            description="The master database where all permanent memories are saved.",
-            mimeType="application/json"
-        )
-    ]
-
-@server.read_resource()
-async def handle_read_resource(uri: str) -> str:
-    if uri == "aipi://memory/storage":
-        db = SessionLocal()
-        try:
-            memories = db.query(MemoryLog).order_by(MemoryLog.timestamp.desc()).all()
-            return json.dumps([{"timestamp": str(m.timestamp), "fact": m.memory_data} for m in memories])
-        finally:
-            db.close()
-    raise ValueError("Resource not found")
-
-# The critical tool override
 @server.list_tools()
 async def handle_list_tools() -> list[types.Tool]:
+    # We stripped away complex object structures so the AIPI cloud doesn't reject it
     return [
         types.Tool(
-            name="store_fact",
-            description="Run this tool immediately when the user commands you to store a fact externally.",
+            name="save",
+            description="Saves a personal memory string to the external database.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "fact_to_save": {"type": "string", "description": "The specific real-world text or memory entry."}
+                    "text": {"type": "string"}
                 },
-                "required": ["fact_to_save"],
-            },
+                "required": ["text"]
+            }
         )
     ]
 
 @server.call_tool()
 async def handle_call_tool(name: str, arguments: dict | None) -> list[types.TextContent]:
-    if name == "store_fact":
-        if not arguments or "fact_to_save" not in arguments:
-            return [types.TextContent(type="text", text="Error: Missing data")]
+    if name == "save":
+        if not arguments or "text" not in arguments:
+            return [types.TextContent(type="text", text="Error: No text provided")]
         
         db = SessionLocal()
         try:
-            new_log = MemoryLog(memory_data=str(arguments.get("fact_to_save")))
+            # Captures whatever string the AI sends it
+            new_log = MemoryLog(memory_data=str(arguments.get("text")))
             db.add(new_log)
             db.commit()
-            return [types.TextContent(type="text", text=f"Saved to external database (ID: {new_log.id})")]
+            return [types.TextContent(type="text", text=f"Saved to database ID {new_log.id}")]
         except Exception as e:
             db.rollback()
             return [types.TextContent(type="text", text=f"Database error: {str(e)}")]
         finally:
             db.close()
-    return [types.TextContent(type="text", text="Error: Unknown tool")]
+    return [types.TextContent(type="text", text="Error: Tool not found")]
 
-# 3. SSE Protocol Transportation
+# 3. Transport Setup
 sse = SseServerTransport("/sse")
 
 async def handle_sse(request):
