@@ -1,13 +1,11 @@
 import os
-from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import create_backend, create_engine, Column, Integer, String, Text, DateTime
+from mcp.server.fastmcp import FastMCP
+from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 
 # 1. Database Setup
-# Render provides the DATABASE_URL environment variable automatically
 DATABASE_URL = os.getenv("DATABASE_URL", "postgresql://user:password@localhost:5432/dbname")
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
@@ -16,7 +14,6 @@ engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
 
-# 2. Database Model (What the database stores)
 class MemoryLog(Base):
     __tablename__ = "memory_logs"
     id = Column(Integer, primary_key=True, index=True)
@@ -26,28 +23,21 @@ class MemoryLog(Base):
 
 Base.metadata.create_all(bind=engine)
 
-# 3. FastAPI Setup
-app = FastAPI()
+# 2. Create the official MCP Server with SSE
+mcp = FastMCP("AIPI Memory Backend")
 
-# Pydantic Model (What your AIPI Lite sends)
-class MemoryPayload(BaseModel):
-    device_id: str
-    memory_data: str
-
-@app.post("/save-memory")
-def save_memory(payload: MemoryPayload):
+# This creates a tool that your AIPI Lite can see and call automatically
+@mcp.tool()
+def save_device_memory(device_id: str, memory_data: str) -> str:
+    """Saves custom device logs and memories into the external database."""
     db = SessionLocal()
     try:
-        new_log = MemoryLog(
-            device_id=payload.device_id,
-            memory_data=payload.memory_data
-        )
+        new_log = MemoryLog(device_id=device_id, memory_data=memory_data)
         db.add(new_log)
         db.commit()
-        db.refresh(new_log)
-        return {"status": "success", "id": new_log.id}
+        return f"Success: Memory saved into database with ID {new_log.id}"
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        return f"Error saving memory: {str(e)}"
     finally:
         db.close()
