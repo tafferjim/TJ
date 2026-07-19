@@ -64,6 +64,7 @@ def initialize_recipe_database():
         print("Recipe database initialized successfully.", flush=True)
     except Exception as e:
         print(f"Recipe database initialization failed: {str(e)}", flush=True)
+        
 
 def initialize_mailbox_database():
     """Creates the mailbox table (in the separate mailbox database) if it does not exist yet."""
