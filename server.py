@@ -8,6 +8,7 @@ mcp = FastMCP("AIPI-Memories-Extension")
 
 DB_URL = os.environ.get("DATABASE_URL")
 RECIPE_DB_URL = os.environ.get("RECIPE_DATABASE_URL")
+MAILBOX_DB_URL = os.environ.get("MAILBOX_DATABASE_URL")
 
 
 # ---------------------------------------------------------------------------
@@ -63,6 +64,32 @@ def initialize_recipe_database():
         print("Recipe database initialized successfully.", flush=True)
     except Exception as e:
         print(f"Recipe database initialization failed: {str(e)}", flush=True)
+
+def initialize_mailbox_database():
+    """Creates the mailbox table (in the separate mailbox database) if it does not exist yet."""
+    print(f"MAILBOX_DB_URL is set: {bool(MAILBOX_DB_URL)}", flush=True)
+    if not MAILBOX_DB_URL:
+        print("MAILBOX_DATABASE_URL not found. Skipping mailbox DB initialization.", flush=True)
+        return
+    try:
+        conn = psycopg2.connect(MAILBOX_DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS mailbox (
+                id SERIAL PRIMARY KEY,
+                from_device TEXT NOT NULL,
+                to_device TEXT,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                read_at TIMESTAMP
+            );
+        """)
+        conn.commit()
+        cursor.close()
+        conn.close()
+        print("Mailbox database initialized successfully.", flush=True)
+    except Exception as e:
+        print(f"Mailbox database initialization failed: {str(e)}", flush=True)
 
 
 # ---------------------------------------------------------------------------
@@ -221,10 +248,66 @@ def retrieve_recipe_from_db(recipe_name: str) -> str:
         print(f"retrieve_recipe_from_db FAILED: {str(e)}", flush=True)
         return f"Database Error while retrieving recipe: {str(e)}"
 
+# ---------------------------------------------------------------------------
+# New inter-device mailbox tools
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def leave_note(from_device: str, message: str, to_device: str = "") -> str:
+    """Leaves a note for another AIPI device to find, or broadcasts to all devices if to_device is blank."""
+    print(f"leave_note CALLED from {from_device!r} to {to_device!r}", flush=True)
+    if not MAILBOX_DB_URL:
+        return "Error: MAILBOX_DATABASE_URL environment variable is not set."
+    try:
+        conn = psycopg2.connect(MAILBOX_DB_URL)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO mailbox (from_device, to_device, message) VALUES (%s, %s, %s);",
+            (from_device, to_device or None, message),
+        )
+        conn.commit()
+        cursor.close()
+        conn.close()
+        return f"Note left for {to_device or 'anyone'}."
+    except Exception as e:
+        print(f"leave_note FAILED: {str(e)}", flush=True)
+        return f"Failed to leave note. Error: {str(e)}"
+
+
+@mcp.tool()
+def check_notes(device_name: str) -> str:
+    """Checks for unread notes addressed to this device or broadcast to all devices."""
+    print(f"check_notes CALLED for {device_name!r}", flush=True)
+    if not MAILBOX_DB_URL:
+        return "Error: MAILBOX_DATABASE_URL environment variable is not set."
+    try:
+        conn = psycopg2.connect(MAILBOX_DB_URL)
+        cursor = conn.cursor()
+        cursor.execute(
+            """SELECT id, from_device, message FROM mailbox
+               WHERE (to_device = %s OR to_device IS NULL) AND read_at IS NULL
+               ORDER BY created_at;""",
+            (device_name,),
+        )
+        rows = cursor.fetchall()
+        if rows:
+            ids = [r[0] for r in rows]
+            cursor.execute("UPDATE mailbox SET read_at = CURRENT_TIMESTAMP WHERE id = ANY(%s);", (ids,))
+            conn.commit()
+        cursor.close()
+        conn.close()
+        if not rows:
+            return "No new notes."
+        return "; ".join(f"{r[1]} says: {r[2]}" for r in rows)
+    except Exception as e:
+        print(f"check_notes FAILED: {str(e)}", flush=True)
+        return f"Failed to check notes. Error: {str(e)}"
+
 
 if __name__ == "__main__":
     initialize_database()
     initialize_recipe_database()
+    initialize_mailbox_database()
     port = int(os.environ.get("PORT", 8000))
     print(f"Starting server on port {port}", flush=True)
     mcp.run(transport="sse", host="0.0.0.0", port=port)
