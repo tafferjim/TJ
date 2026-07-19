@@ -3,12 +3,14 @@ import psycopg2
 import requests
 from bs4 import BeautifulSoup
 from fastmcp import FastMCP
+import re
 
 mcp = FastMCP("AIPI-Memories-Extension")
 
 DB_URL = os.environ.get("DATABASE_URL")
 RECIPE_DB_URL = os.environ.get("RECIPE_DATABASE_URL")
 MAILBOX_DB_URL = os.environ.get("MAILBOX_DATABASE_URL")
+READONLY_DB_URL = os.environ.get("READONLY_DATABASE_URL")
 
 
 # ---------------------------------------------------------------------------
@@ -303,6 +305,47 @@ def check_notes(device_name: str) -> str:
     except Exception as e:
         print(f"check_notes FAILED: {str(e)}", flush=True)
         return f"Failed to check notes. Error: {str(e)}"
+        
+
+# ---------------------------------------------------------------------------
+# New read-only SQL sandbox tool
+# ---------------------------------------------------------------------------
+
+FORBIDDEN_SQL = re.compile(r"\b(insert|update|delete|drop|alter|truncate|grant|create|copy)\b", re.IGNORECASE)
+
+@mcp.tool()
+def run_readonly_query(sql: str) -> str:
+    """Runs a read-only SELECT query against the memory database to answer ad-hoc questions. SELECT statements only."""
+    print(f"run_readonly_query CALLED with sql: {sql!r}", flush=True)
+    if not READONLY_DB_URL:
+        return "Error: READONLY_DATABASE_URL environment variable is not set."
+
+    stripped = sql.strip().rstrip(";")
+
+    if not stripped.lower().startswith("select"):
+        return "Only SELECT queries are allowed."
+    if FORBIDDEN_SQL.search(stripped):
+        return "Query contains a disallowed keyword."
+    if ";" in stripped:
+        return "Multiple statements are not allowed."
+
+    try:
+        conn = psycopg2.connect(READONLY_DB_URL)
+        cursor = conn.cursor()
+        cursor.execute("SET statement_timeout = 3000;")
+        cursor.execute(stripped + " LIMIT 20;")
+        rows = cursor.fetchall()
+        cols = [desc[0] for desc in cursor.description]
+        cursor.close()
+        conn.close()
+        print(f"run_readonly_query: retrieved {len(rows)} rows", flush=True)
+        if not rows:
+            return "No results."
+        results = [dict(zip(cols, row)) for row in rows]
+        return "\n".join(str(r) for r in results)
+    except Exception as e:
+        print(f"run_readonly_query FAILED: {str(e)}", flush=True)
+        return f"Query error: {str(e)}"
 
 
 if __name__ == "__main__":
